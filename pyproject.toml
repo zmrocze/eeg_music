@@ -1,0 +1,11 @@
+[project]
+name = "mama_rag"
+version = "0.1.0"
+description = "Minimal project setup"
+
+requires-python = "==3.12.11"
+dependencies = [
+  "openneuro-py",
+  # "jupyterlab",
+  "ipykernel",
+]
