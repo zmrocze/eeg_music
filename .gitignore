@@ -1,3 +1,5 @@
+datasets
+
 .git
 **/.git
 **/.direnv
@@ -24,3 +26,8 @@ devenv.local.nix
 
 # pre-commit
 .pre-commit-config.yaml
+
+.warpindexingignore
+
+__pycache__
+*.egg-info

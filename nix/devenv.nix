@@ -11,11 +11,7 @@
           git --version
         '';
 
-        # https://devenv.sh/tasks/
-        # tasks = {
-        #   "myproj:setup".exec = "mytool build";
-        #   "devenv:enterShell".after = [ "myproj:setup" ];
-        # };
+        scripts.local-jupyter.exec = "uv run jupyter notebook --no-browser --ip=127.0.0.1 --port=8888 --NotebookApp.token= --NotebookApp.password= --NotebookApp.allow_origin=*";
 
         # https://devenv.sh/tests/
         enterTest = ''

@@ -1,11 +1,35 @@
 [project]
-name = "mama_rag"
+name = "magisterka"
 version = "0.1.0"
 description = "Minimal project setup"
 
 requires-python = "==3.12.11"
 dependencies = [
   "openneuro-py",
+  "scipy",
+  "mne",
+  "numpy",
+  # "h5py",
+  "mat73",
   # "jupyterlab",
   "ipykernel",
+  "ipython",
+  "jupyter",
+  "notebook",
+  "pip"
 ]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+
+[tool.pyright]
+venvPath = ".devenv/state"
+venv = "venv"
