@@ -8,6 +8,7 @@ dependencies = [
   "openneuro-py",
   "scipy",
   "mne",
+  "mne-bids[full]",
   "numpy",
   # "h5py",
   "mat73",

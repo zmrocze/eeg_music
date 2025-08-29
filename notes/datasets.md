@@ -23,6 +23,8 @@ Twelve participants were assigned to each stimulus, and each participant heard t
 
 download link: https://exhibits.stanford.edu/data/catalog/sd922db3535
 
+citation: Blair Kaneshiro, Duc T. Nguyen, Jacek P. Dmochowski, Anthony M. Norcia, and Jonathan Berger (2016). Naturalistic Music EEG Dataset - Hindi (NMED-H). Stanford Digital Repository. Available at: http://purl.stanford.edu/sd922db3535
+
 3. torcheeg.DEAPDataset (music known?)
 
 128Hz, 40 1-minute long excerpts from music video
