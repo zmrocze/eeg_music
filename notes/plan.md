@@ -53,5 +53,3 @@ eeg, music <- batch
 A <- eegpt eeg
 B <- vocoder A [eeg] ## diffusion loop
 loss music B
-
-
