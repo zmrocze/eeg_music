@@ -70,12 +70,13 @@ References:
 """
 
 from abc import ABC, abstractmethod
-from data import CalibrationMusicId, EEGTrial, TrainingMusicId
+from data import CalibrationMusicId, EEGTrial, TrainingMusicId, WavRAW
 from helper import onset_secs_to_samples
 from mne_bids import get_entity_vals, BIDSPath, read_raw_bids
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Iterator, Tuple
+from scipy.io import wavfile
 
 
 class BaseBCMILoader(ABC):
@@ -720,14 +721,18 @@ class BCMICalibrationLoader(BaseBCMILoader):
         for subject, session, run, r in self.loader_data_iter():
             for _, marker in r["processed_events"]["marker_events"].iterrows():
                 t0 = marker["onset"]
-                music_id = CalibrationMusicId(number=round(marker["trial_type"]) - 100)
+                music_filename = CalibrationMusicId(
+                    number=round(marker["trial_type"]) - 100
+                ).to_filename()
+                music_path = self.root_path / "stimuli" / music_filename
+                music = wavfile.read(music_path)
+                music_raw = WavRAW(raw_data=music[1], sample_rate=music[0])
                 # wav_filenames_ordered[
-                yield EEGTrial(
-                    music_id=music_id,
-                    raw_eeg=r["raw"].crop(
-                        start=t0, stop=t0 + duration, include_tmax=False
-                    ),
-                )
+                if music_raw.is_not_empty():
+                    yield EEGTrial(
+                        music_raw=music_raw,
+                        raw_eeg=r["raw"].crop(t0, t0 + duration, include_tmax=False),
+                    )
 
     def _get_experimental_info(self) -> Dict[str, Any]:
         return {
@@ -849,14 +854,26 @@ class BCMITrainingLoader(BaseBCMILoader):
                 t0 = x["affect_1"]["onset"]
                 t1 = x["affect_2"]["onset"]
                 t2 = x["affect_2"]["onset"] + trial_duration_secs
-                yield EEGTrial(
-                    music_id=TrainingMusicId(int(i), int(j), session),
-                    raw_eeg=r["raw"].crop(t0, t1, include_tmax=False),
-                )
-                yield EEGTrial(
-                    music_id=TrainingMusicId(int(i), int(j), session),
-                    raw_eeg=r["raw"].crop(t1, t2, include_tmax=False),
-                )
+                musicfile = TrainingMusicId(int(i), int(j), session).to_filename()
+                music_path = self.root_path / "stimuli" / musicfile
+                rate, data = wavfile.read(music_path)
+                mid_frame = 20 * rate
+                print(mid_frame)
+                first_half = data[:mid_frame]
+                second_half = data[mid_frame:]
+
+                music1 = WavRAW(raw_data=first_half, sample_rate=rate)
+                music2 = WavRAW(raw_data=second_half, sample_rate=rate)
+                if music1.is_not_empty():
+                    yield EEGTrial(
+                        music_raw=music1,
+                        raw_eeg=r["raw"].crop(t0, t1, include_tmax=False),
+                    )
+                if music2.is_not_empty():
+                    yield EEGTrial(
+                        music_raw=music2,
+                        raw_eeg=r["raw"].crop(t1, t2, include_tmax=False),
+                    )
 
     def _get_experimental_info(self) -> Dict[str, Any]:
         return {

@@ -2,7 +2,9 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Union
+import numpy as np
+from numpy.typing import NDArray
 from mne.io import BaseRaw
 
 
@@ -157,15 +159,20 @@ class TrainingMusicId(MusicID):
 class WavRAW:
     """Data class containing raw WAV data and its rate."""
 
-    raw_data: Any
-    sample_rate: int
+    raw_data: NDArray[np.floating]  # Audio data as numpy array of float values
+    sample_rate: int  # Sample rate in Hz
+
+    def is_not_empty(self) -> bool:
+        """Check if the WAV data is not empty."""
+        return self.raw_data.size > 0
 
 
 @dataclass
 class EEGTrial:
     """Data class containing music ID, raw EEG data, and emotion code."""
 
-    music_id: MusicID  # Music identifier object
-    # music_raw : WavRAW
+    # todo: care to trim music and raw to common length
+    # music_id: MusicID  # Music identifier object
+    music_raw: WavRAW
     raw_eeg: BaseRaw
     # emotion_code: int  # Integer code representing emotional state

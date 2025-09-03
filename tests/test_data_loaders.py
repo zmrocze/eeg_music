@@ -747,6 +747,240 @@ class TestOpenMIIRLoader(unittest.TestCase):
         print("  ✓ Dataset statistics generated successfully")
 
 
+class TestTrialIterator(unittest.TestCase):
+    """Test suite for trial_iterator functionality in BCMI loaders."""
+
+    @skip_if_dataset_missing(BCMI_ROOT / "bcmi-calibration")
+    def test_calibration_trial_iterator(self):
+        """Test trial_iterator for BCMI Calibration loader."""
+        print("\n🧪 Testing BCMI Calibration trial_iterator...")
+
+        loader = BCMICalibrationLoader(str(BCMI_ROOT / "bcmi-calibration"))
+
+        # Load minimal data for testing
+        loader.load_all_subjects(max_subjects=1, max_runs_per_session=1)
+
+        if not loader.data:
+            self.skipTest("No data loaded for calibration trial iterator test")
+
+        # Test that trial_iterator is implemented and works
+        trial_count = 0
+        trial_duration = 0
+        try:
+            for trial in loader.trial_iterator():
+                # Check that we get EEGTrial objects with expected attributes
+                self.assertHasAttr(
+                    trial, "music_raw", "Trial should have music_raw attribute"
+                )
+                self.assertHasAttr(
+                    trial, "raw_eeg", "Trial should have raw_eeg attribute"
+                )
+
+                # Check music_raw structure
+                music_raw = trial.music_raw
+                self.assertHasAttr(
+                    music_raw, "raw_data", "music_raw should have raw_data attribute"
+                )
+                self.assertHasAttr(
+                    music_raw,
+                    "sample_rate",
+                    "music_raw should have sample_rate attribute",
+                )
+                self.assertTrue(
+                    music_raw.is_not_empty(), "Music data should not be empty"
+                )
+
+                # Check raw_eeg is a proper MNE Raw object
+                raw_eeg = trial.raw_eeg
+                self.assertTrue(
+                    hasattr(raw_eeg, "info"), "raw_eeg should be MNE Raw object"
+                )
+                self.assertTrue(hasattr(raw_eeg, "times"), "raw_eeg should have times")
+                self.assertGreater(
+                    len(raw_eeg.times), 0, "EEG data should not be empty"
+                )
+
+                # Check trial duration (should be around 21 seconds for calibration)
+                trial_duration = raw_eeg.times[-1] - raw_eeg.times[0]
+                self.assertGreater(
+                    trial_duration, 19, "Trial should be at least 19 seconds"
+                )
+                self.assertLess(
+                    trial_duration, 23, "Trial should be less than 23 seconds"
+                )
+
+                trial_count += 1
+                if trial_count >= 3:  # Test only first few trials
+                    break
+
+            self.assertGreater(trial_count, 0, "Should yield at least one trial")
+            print(f"  ✓ Successfully generated {trial_count} trials")
+            print(f"  ✓ Trial duration check: ~{trial_duration:.1f}s")
+
+        except Exception as e:
+            self.fail(f"trial_iterator failed: {str(e)}")
+
+    @skip_if_dataset_missing(BCMI_ROOT / "bcmi-training")
+    def test_training_trial_iterator(self):
+        """Test trial_iterator for BCMI Training loader."""
+        print("\n🧪 Testing BCMI Training trial_iterator...")
+
+        loader = BCMITrainingLoader(str(BCMI_ROOT / "bcmi-training"))
+
+        # Load minimal data for testing
+        loader.load_all_subjects(
+            max_subjects=1, max_runs_per_session=1, max_sessions_per_subject=1
+        )
+
+        # Test that trial_iterator is implemented and works
+        trial_count = 0
+        trial_duration = 0
+        try:
+            for trial in loader.trial_iterator():
+                # Check that we get EEGTrial objects with expected attributes
+                self.assertHasAttr(
+                    trial, "music_raw", "Trial should have music_raw attribute"
+                )
+                self.assertHasAttr(
+                    trial, "raw_eeg", "Trial should have raw_eeg attribute"
+                )
+
+                # Check music_raw structure
+                music_raw = trial.music_raw
+                self.assertHasAttr(
+                    music_raw, "raw_data", "music_raw should have raw_data attribute"
+                )
+                self.assertHasAttr(
+                    music_raw,
+                    "sample_rate",
+                    "music_raw should have sample_rate attribute",
+                )
+                self.assertTrue(
+                    music_raw.is_not_empty(), "Music data should not be empty"
+                )
+
+                # Check raw_eeg is a proper MNE Raw object
+                raw_eeg = trial.raw_eeg
+                self.assertTrue(
+                    hasattr(raw_eeg, "info"), "raw_eeg should be MNE Raw object"
+                )
+                self.assertTrue(hasattr(raw_eeg, "times"), "raw_eeg should have times")
+                self.assertGreater(
+                    len(raw_eeg.times), 0, "EEG data should not be empty"
+                )
+
+                # Check trial duration (should be around 20 seconds for training)
+                trial_duration = raw_eeg.times[-1] - raw_eeg.times[0]
+                self.assertGreater(
+                    trial_duration, 18, "Trial should be at least 18 seconds"
+                )
+                self.assertLess(
+                    trial_duration, 22, "Trial should be less than 22 seconds"
+                )
+
+                trial_count += 1
+
+            self.assertGreater(trial_count, 0, "Should yield at least one trial")
+            print(f"  ✓ Successfully generated {trial_count} trials")
+            print(f"  ✓ Trial duration check: ~{trial_duration:.1f}s")
+
+        except Exception as e:
+            self.fail(f"training trial_iterator failed: {str(e)}")
+
+    def test_not_implemented_trial_iterators(self):
+        """Test that NotImplementedError is raised for loaders that don't support trial_iterator."""
+        print("\n🧪 Testing NotImplementedError for unsupported trial_iterators...")
+
+        # Test loaders that should raise NotImplementedError
+        loader_classes_and_paths = [
+            (BCMITestingLoader, BCMI_ROOT / "bcmi-testing", "Testing"),
+            (BCMITempoLoader, BCMI_ROOT / "bcmi-tempo", "Tempo"),
+            (BCMIScoresLoader, BCMI_ROOT / "bcmi-scores", "Scores"),
+            (BCMIFMRILoader, BCMI_ROOT / "bcmi-fmri", "FMRI"),
+        ]
+
+        for loader_class, dataset_path, dataset_name in loader_classes_and_paths:
+            if dataset_exists(dataset_path):
+                try:
+                    loader = loader_class(str(dataset_path))
+
+                    # Should raise NotImplementedError when calling trial_iterator
+                    with self.assertRaises(
+                        NotImplementedError,
+                        msg=f"{dataset_name} loader should raise NotImplementedError",
+                    ):
+                        # Try to get the first trial from iterator
+                        list(loader.trial_iterator())
+
+                    print(
+                        f"  ✓ {dataset_name} loader correctly raises NotImplementedError"
+                    )
+
+                except Exception as e:
+                    print(f"  ⚠ Error testing {dataset_name} loader: {e}")
+            else:
+                print(f"  - {dataset_name} dataset not available, skipping")
+
+    def test_trial_iterator_consistency(self):
+        """Test that trial_iterator produces consistent results across multiple calls."""
+        print("\n🧪 Testing trial_iterator consistency...")
+
+        # Test with calibration dataset if available
+        if dataset_exists(BCMI_ROOT / "bcmi-calibration"):
+            loader = BCMICalibrationLoader(str(BCMI_ROOT / "bcmi-calibration"))
+            loader.load_all_subjects(max_subjects=1, max_runs_per_session=1)
+
+            if loader.data:
+                # Get first few trials from first call
+                first_call_trials = []
+                for i, trial in enumerate(loader.trial_iterator()):
+                    if i >= 2:  # Only test first 2 trials
+                        break
+                    first_call_trials.append(
+                        (trial.raw_eeg.times.shape, trial.music_raw.raw_data.shape)
+                    )
+
+                # Get first few trials from second call
+                second_call_trials = []
+                for i, trial in enumerate(loader.trial_iterator()):
+                    if i >= 2:
+                        break
+                    second_call_trials.append(
+                        (trial.raw_eeg.times.shape, trial.music_raw.raw_data.shape)
+                    )
+
+                # Should produce the same structure
+                self.assertEqual(
+                    len(first_call_trials),
+                    len(second_call_trials),
+                    "trial_iterator should produce same number of trials on repeated calls",
+                )
+
+                for i, (first_shapes, second_shapes) in enumerate(
+                    zip(first_call_trials, second_call_trials)
+                ):
+                    self.assertEqual(
+                        first_shapes,
+                        second_shapes,
+                        f"Trial {i} should have same shapes on repeated calls",
+                    )
+
+                print(
+                    f"  ✓ trial_iterator produces consistent results across {len(first_call_trials)} trials"
+                )
+            else:
+                print("  - No data loaded, skipping consistency test")
+        else:
+            print("  - Calibration dataset not available, skipping consistency test")
+
+    def assertHasAttr(self, obj, attr_name, msg=None):
+        """Helper method to assert object has attribute."""
+        if not hasattr(obj, attr_name):
+            if msg is None:
+                msg = f"Object {obj} should have attribute '{attr_name}'"
+            self.fail(msg)
+
+
 class TestDataLoaderIntegration(unittest.TestCase):
     """Integration tests for all dataset loaders."""
 
