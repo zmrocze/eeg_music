@@ -70,11 +70,14 @@ References:
 """
 
 from abc import ABC, abstractmethod
+from data import CalibrationMusicId, EEGTrial, TrainingMusicId
+from helper import onset_secs_to_samples
 from mne_bids import get_entity_vals, BIDSPath, read_raw_bids
 import pandas as pd
+import numpy as np
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Iterator, Tuple
 
 
 class BaseBCMILoader(ABC):
@@ -133,7 +136,21 @@ class BaseBCMILoader(ABC):
             8: {'valence': 'Neutral', 'arousal': 'Low', 'description': 'Calm/Relaxed'},
             9: {'valence': 'Neutral', 'arousal': 'Neutral', 'description': 'Neutral/Balanced'}
         }
-    
+
+    def loader_data_iter(self) -> Iterator[Tuple[str, str, str, Dict[str, Any]]]:
+        """
+        Iterator over all loaded data (subject, session, run, run_data).
+        
+        Yields:
+            Tuple of (subject_id, session_key, run_id, run_data)
+        """
+        data = self.data
+        for subject in data.keys():
+            for session in data[subject].keys():
+                for run in data[subject][session].keys():
+                    r = data[subject][session][run]
+                    yield subject, session, run, r
+
     def _get_available_subjects(self) -> List[str]:
         """Get list of available subjects in the dataset."""
         try:
@@ -169,7 +186,12 @@ class BaseBCMILoader(ABC):
             return sorted(runs) if runs else ['1']
         except Exception:
             return ['1', '2', '3', '4', '5']  # Common fallback
-    
+
+    @abstractmethod
+    def trial_iterator(self) ->  Iterator[EEGTrial]:
+        """Iterate over trial eeg snippets."""
+        pass
+
     @abstractmethod
     def _get_experimental_info(self) -> Dict[str, Any]:
         """Get dataset-specific experimental information."""
@@ -312,8 +334,10 @@ class BaseBCMILoader(ABC):
                         'duration': raw.duration,
                         'n_channels': raw.info['nchan'],
                         'sfreq': raw.info['sfreq'],
-                        'experimental_info': self._get_experimental_info()
+                        'experimental_info': self._get_experimental_info(),
+                        'bids_path': bids_path
                     }
+                    run_data['experimental_info']['task_name'] = task_name
                     
                     # Add dataset-specific processing
                     specific_events = self._process_events_specific(events_df, run_data)
@@ -566,7 +590,6 @@ class BaseBCMILoader(ABC):
         """Get list of all available subjects."""
         return self.subjects
 
-
 class BCMICalibrationLoader(BaseBCMILoader):
     """
     Loader for BCMI Calibration dataset.
@@ -618,6 +641,29 @@ class BCMICalibrationLoader(BaseBCMILoader):
         Brain-Computer Interfaces.
     """
     
+
+    def trial_iterator(self) -> Iterator[EEGTrial]:
+        """
+        Iterate over EEG trial snippets for calibration data.
+        
+        For calibration dataset, each trial is 21s.
+        
+        Yields:
+            EEGTrial: Individual trial data with music_id, raw_eeg, and emotion_code
+        """
+    
+        duration = 21 # secs
+        for subject, session, run, r in self.loader_data_iter():
+            for _, marker in r['processed_events']['marker_events'].iterrows():
+                t0 = marker['onset']
+                music_id = CalibrationMusicId(number=round(marker['trial_type']) - 100)
+                # wav_filenames_ordered[ 
+                yield EEGTrial(
+                    music_id=music_id,
+                    raw_eeg=r['raw'].crop(start=t0, stop=t0 + duration, include_tmax=False),
+                )
+
+
     def _get_experimental_info(self) -> Dict[str, Any]:
         return {
             'paradigm_type': 'Calibration',
@@ -712,7 +758,25 @@ class BCMITrainingLoader(BaseBCMILoader):
         ...         all_contrasts.extend(contrasts)
         >>> print(f"Training contrasts: {set(all_contrasts)}")
     """
-    
+
+    def trial_iterator(self) -> Iterator[EEGTrial]:
+        trial_duration_secs = 20 # always
+        for subject, session, run, r in self.loader_data_iter():
+            for x in r['processed_events']['training_pairs']:
+                i,j = x['affect_1']['code'], x['affect_2']['code']
+                # music: i-j_session
+                # print(x['affect_2']['onset'] - x['affect_1']['onset'])
+                assert onset_secs_to_samples(x['affect_2']['onset'] - x['affect_1']['onset'], sfreq=r['raw'].info['sfreq']) == 20_000
+                # t0 = onset_secs_to_samples(x['affect_1']['onset'], sfreq=r['raw'].info['sfreq'])
+                # t1 = onset_secs_to_samples(x['affect_2']['onset'], sfreq=r['raw'].info['sfreq'])
+                # t2 = onset_secs_to_samples(x['affect_2']['onset'] + trial_duration_secs, sfreq=r['raw'].info['sfreq'])
+                t0 = x['affect_1']['onset']
+                t1 = x['affect_2']['onset']
+                t2 = x['affect_2']['onset'] + trial_duration_secs
+                yield EEGTrial(music_id=TrainingMusicId(int(i), int(j), session, 0), raw_eeg=r['raw'].crop(t0, t1, include_tmax=False))
+                yield EEGTrial(music_id=TrainingMusicId(int(i), int(j), session, 1), raw_eeg=r['raw'].crop(t1, t2, include_tmax=False))
+
+
     def _get_experimental_info(self) -> Dict[str, Any]:
         return {
             'paradigm_type': 'Training',
@@ -944,33 +1008,109 @@ class BCMIFMRILoader(BaseBCMILoader):
             'description': 'Joint EEG-fMRI with classical music and continuous emotion reporting'
         }
     
-    def _process_events_specific(self, events_df: pd.DataFrame, 
+    def _process_events_specific(self, events_df: pd.DataFrame,
                                run_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process fMRI-specific events with classical music trials."""
+        """Process fMRI-specific events to identify music trials."""
         try:
-            emotion_events = run_data['processed_events'].get('emotion_events', pd.DataFrame())
-            if emotion_events.empty:
-                return {}
-            
-            # fMRI trials with classical music
+            task_name = run_data['experimental_info']['task_name']
+
+            # Find trial start markers (code 768)
+            trial_starts = events_df[events_df['trial_type'] == 768].copy()
+            if trial_starts.empty:
+                return {'fmri_trials': []}
+
+            # Handle consecutive markers by taking the first of each group
+            # A new trial is assumed if the gap is > 1 second
+            onsets = trial_starts['onset']
+            true_trial_starts = trial_starts[~(onsets.diff() < 1)].reset_index(drop=True)
+
             fmri_trials = []
-            for idx, event in emotion_events.iterrows():
-                fmri_trials.append({
-                    'trial_number': idx + 1,
-                    'music_condition': {
-                        'code': event['trial_type'],
-                        'onset': event['onset'],
-                        'duration': event['duration'],
-                        'target_emotion': event['emotion_description']
-                    },
-                    'recording_method': 'Simultaneous EEG-fMRI',
-                    'emotion_reporting': 'FEELTRACE continuous'
-                })
+
+            if 'genMusic' in task_name:
+                # Get music channel from EEG data
+                raw = run_data['raw']
+                if 'music' in raw.ch_names:
+                    music_idx = raw.ch_names.index('music')
+                    music_data = raw.get_data(picks=[music_idx])[0]
+                    
+                    for i, trial_event in true_trial_starts.iterrows():
+                        onset = trial_event['onset']
+                        
+                        # Get music channel value at trial onset
+                        sample_idx = int(onset * raw.info['sfreq'])
+                        if sample_idx < raw.n_times:
+                            music_val = music_data[sample_idx]
+                            
+                            # Scale by 100,000 for generated music files
+                            music_code = int(round(music_val * 100000))
+                            
+                            if music_code > 0:
+                                # Generated files use format {emotion}-{emotion}_{variant}.wav
+                                # We only have the first emotion code, so we specify pattern
+                                music_file = f"generated/{music_code}-*_*.wav"
+                            else:
+                                music_file = None  # No music or washout
+                            
+                            fmri_trials.append({
+                                'trial_number': i + 1,
+                                'onset': onset,
+                                'duration': 40.0,  # Generated music clips are 40s
+                                'music_file': music_file,
+                                'music_code': music_code,
+                                'task_type': 'generatedMusic'
+                            })
+                else:
+                    print(f"    Warning: 'music' channel not found in EEG data for {task_name}")
+
+            elif 'classicalMusic' in task_name:
+                # For classical music, decode piece number from music channel
+                raw = run_data['raw']
+                if 'music' in raw.ch_names:
+                    music_idx = raw.ch_names.index('music')
+                    music_data = raw.get_data(picks=[music_idx])[0]
+                    
+                    for i, trial_event in true_trial_starts.iterrows():
+                        onset = trial_event['onset']
+                        
+                        # Get music channel value at trial onset
+                        sample_idx = int(onset * raw.info['sfreq'])
+                        piece_number = None
+                        if sample_idx < raw.n_times:
+                            music_val = music_data[sample_idx]
+                            
+                            # Scale by 10,000,000 for classical music files
+                            piece_number = int(round(music_val * 10000000))
+                            
+                            if piece_number > 0:
+                                music_file = f"classical/p{piece_number}_*.mp3"
+                            else:
+                                music_file = None  # Washout/rest period
+                        else:
+                            music_file = None
+                        
+                        # Determine duration (next trial start or end of recording)
+                        if i < len(true_trial_starts) - 1:
+                            next_onset = true_trial_starts.iloc[i + 1]['onset']
+                            duration = next_onset - onset
+                        else:
+                            duration = run_data['raw'].times[-1] - onset
+                        
+                        fmri_trials.append({
+                            'trial_number': i + 1,
+                            'onset': onset,
+                            'duration': duration,
+                            'music_file': music_file,
+                            'music_code': piece_number if music_file else None,
+                            'task_type': 'classicalMusic'
+                        })
+                else:
+                    print(f"    Warning: 'music' channel not found in EEG data for {task_name}")
             
             return {'fmri_trials': fmri_trials}
             
         except Exception as e:
-            print(f"    Warning: Could not process fMRI events - {str(e)[:50]}")
+            task_name_str = run_data.get('experimental_info', {}).get('task_name', 'N/A')
+            print(f"    Warning: Could not process fMRI events for task {task_name_str} - {e}")
             return {}
 
 

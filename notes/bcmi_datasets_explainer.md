@@ -194,10 +194,8 @@ Check if somewhwat matches the users report???
 **Event Structure:**
 - **Special markers:**
   - **Code 1:** Task/session start
-  - **Code 47:** Music onset (PRIMARY MARKER)
-  - **Code 265:** Emotion rating (FEELTRACE)
-  - **Code 10:** N-back task event
-  - **Codes 768, 1283, 1285, 34053:** Session control
+  - **Code 265:** pulse artifact
+  - **Codes 768:** Start of trial, music played to participants.
 - **Duration:** 0.001 seconds (instantaneous markers)
 - **Pattern:** Dense event stream with multiple marker types
 
@@ -213,35 +211,14 @@ Check if somewhwat matches the users report???
 3. `washout`: Animal sounds for baseline
 
 **Alignment Protocol:**
-```python
-# Code 47 marks every music onset/segment
-music_onsets = events[events['trial_type'] == 47]
-
-# Different protocols by task:
-if task == 'genMusic':
-    # 40s clips from generated/
-    clip_duration = 40
-    # Use emotion pair files
-    
-elif task == 'classicalMusic':
-    # Longer pieces, multiple code 47 per piece
-    # Segments within 120-180s pieces
-    
-elif task == 'washout':
-    # Short 1-2s animal sounds
-    clip_duration = 1-2
-
-# Continuous emotion ratings
-rating_events = events[events['trial_type'] == 265]
-# Extract valence-arousal values at these timepoints
-
-# For fMRI analysis, add 6s hemodynamic delay
-fmri_onset = music_onset + 6
-```
 
 karol: 
 "
-music	stimuli	V	good	The value of the music channel indicates which piece of music (from the stimuli folder) was played to the participant in a given trial. To convert from the values stored in this channel to the music channel: 1) multiply the value by 20, 2) convert to a string, 3) the file name is then constructed from the resulting 3-element number. For example, if the number is 282 this indicates file 2-8_2.wav from the stimuli folder.
+music   stimuli V   good    The value of the music channel indicates which piece of music (from the stimuli folder) was played to the participant in
+ a given trial. To convert from the values stored in this channel to the music channel: 1) multiply the value by 20, 2) convert to a string, 3) the 
+file name is then constructed from the resulting 3-element number. For example, if the number is 282 this indicates file 2-8_2.wav from the stimuli 
+folder.
+trialtype   stimuli V   good    n/a
 "
 
 "
@@ -252,7 +229,7 @@ music	stimuli	V	good	The value of the music channel indicates which piece of mus
 	},
 "
 
-also in _eeg.json there's "	"TaskName": "GeneratedMusic"," or ?
+Q: why in the events there are consecutive 768 markers (distant ~100ms from each other), which one is correct?
 
 ## 2. Cross-Dataset Comparison Table
 

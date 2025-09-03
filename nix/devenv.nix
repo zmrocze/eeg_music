@@ -23,7 +23,11 @@
           enable = true;
           uv = {
             enable = true;
-            sync.enable = true;
+            sync = {
+              enable = true;
+              allExtras = true;
+              allGroups = true;
+            };
           };
           package = pkgs.python312;
           # version = "3.12";
