@@ -36,7 +36,7 @@
         # https://devenv.sh/git-hooks/
         git-hooks.hooks = {
           shellcheck.enable = true;
-          markdownlint.enable = true;
+          # markdownlint.enable = true; # waste of time
           
           deadnix.enable = true;
           statix.enable = true;
@@ -44,8 +44,8 @@
           nil.enable = true;
 
           uv-check.enable = true;
-          black.enable = true;
-          flake8.enable = true;
+          ruff.enable = true;
+          ruff-format.enable = true;
           pyright.enable = true;
         };
 

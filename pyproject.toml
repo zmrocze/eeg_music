@@ -42,3 +42,7 @@ where = ["src"]
 [tool.pyright]
 venvPath = ".devenv/state"
 venv = "venv"
+
+[tool.ruff-format]
+indent-style = "space"
+indent-width = 2
