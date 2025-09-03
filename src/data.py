@@ -230,7 +230,7 @@ class Trial:
   data: TrialData
 
 
-class Dataset:
+class EEGMusicDataset:
   """Dataset containing EEG trials with metadata."""
 
   def __init__(self, records=None):
@@ -239,7 +239,7 @@ class Dataset:
       from pandas import Index
 
       self.df = pd.DataFrame(
-        columns=Index(["subject", "run", "session", "trial_id", "trial"])
+        columns=Index(["dataset", "subject", "session", "run", "trial_data"])
       )
     else:
       data = []
@@ -255,30 +255,28 @@ class Dataset:
         )
       self.df = pd.DataFrame(data)
 
-  def add_trial(
-    self, subject: str, run: int, session: int, trial_id: int, trial: Trial
-  ):
+  def add_trial(self, trial: Trial):
     """Add a trial to the dataset."""
     new_row = pd.DataFrame(
       {
-        "subject": [subject],
-        "run": [run],
-        "session": [session],
-        "trial_id": [trial_id],
-        "trial": [trial],
+        "dataset": [trial.dataset],
+        "subject": [trial.subject],
+        "session": [trial.session],
+        "run": [trial.run],
+        "trial_data": [trial.data],
       }
     )
     self.df = pd.concat([self.df, new_row], ignore_index=True)
 
-  def merge(self, other: "Dataset") -> "Dataset":
+  def merge(self, other: "EEGMusicDataset") -> "EEGMusicDataset":
     """Merge this dataset with another dataset."""
-    merged_dataset = Dataset()
+    merged_dataset = EEGMusicDataset()
     merged_dataset.df = pd.concat([self.df, other.df], ignore_index=True)
     return merged_dataset
 
-  def map(self, func) -> "Dataset":
+  def map(self, func) -> "EEGMusicDataset":
     """Map underlying dataframe."""
-    mapped_dataset = Dataset()
+    mapped_dataset = EEGMusicDataset()
     df = func(self.df.copy())
     mapped_dataset.df = df
     return mapped_dataset
