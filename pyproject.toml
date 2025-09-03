@@ -43,6 +43,8 @@ where = ["src"]
 venvPath = ".devenv/state"
 venv = "venv"
 
-[tool.ruff-format]
-indent-style = "space"
+[tool.ruff]
 indent-width = 2
+
+[tool.ruff.format]
+indent-style = "space"
