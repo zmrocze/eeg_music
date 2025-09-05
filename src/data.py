@@ -10,6 +10,7 @@ from mne.io import BaseRaw
 import pandas as pd
 from scipy.io import wavfile
 import mne
+from pandas import Index
 
 
 class MusicID(ABC):
@@ -200,6 +201,18 @@ class RawTrial(TrialData):
     """Get the EEG raw data."""
     return self.raw_eeg
 
+  def save(self, base_dir: Path) -> None:
+    """Save trial to directory using BIDS format for EEG."""
+    eeg_dir = base_dir / "eeg"
+    audio_dir = base_dir / "audio"
+    eeg_dir.mkdir(parents=True, exist_ok=True)
+    audio_dir.mkdir(exist_ok=True)
+
+    mne.export.export_raw(eeg_dir / "eeg.edf", self.raw_eeg, fmt="edf", overwrite=False)
+    wavfile.write(
+      audio_dir / "audio.wav", self.music_raw.sample_rate, self.music_raw.raw_data
+    )
+
 
 @dataclass
 class OnDiskTrial(TrialData):
@@ -215,8 +228,12 @@ class OnDiskTrial(TrialData):
 
   def get_eeg_raw(self) -> BaseRaw:
     """Load and return the EEG raw data from file."""
-    raw = mne.io.read_raw_bdf(self.eeg_file_path, preload=True)
+    raw = mne.io.read_raw(self.eeg_file_path, preload=True)
     return raw
+
+  def load(self) -> RawTrial:
+    """Load trial data from file paths and return a RawTrial."""
+    return RawTrial(music_raw=self.get_music_raw(), raw_eeg=self.get_eeg_raw())
 
 
 @dataclass
@@ -235,9 +252,6 @@ class EEGMusicDataset:
 
   def __init__(self, records=None):
     if records is None:
-      # Use Index to fix type issue with columns parameter
-      from pandas import Index
-
       self.df = pd.DataFrame(
         columns=Index(["dataset", "subject", "session", "run", "trial_data"])
       )

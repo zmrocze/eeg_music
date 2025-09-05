@@ -712,7 +712,7 @@ class BCMICalibrationLoader(BaseBCMILoader):
             run=run,
             data=RawTrial(
               music_raw=music_raw,
-              raw_eeg=r["raw"].crop(t0, t0 + duration, include_tmax=False),
+              raw_eeg=r["raw"].copy().crop(t0, t0 + duration, include_tmax=False),
             ),
           )
 
@@ -830,9 +830,6 @@ class BCMITrainingLoader(BaseBCMILoader):
           )
           == 20_000
         )
-        # t0 = onset_secs_to_samples(x['affect_1']['onset'], sfreq=r['raw'].info['sfreq'])
-        # t1 = onset_secs_to_samples(x['affect_2']['onset'], sfreq=r['raw'].info['sfreq'])
-        # t2 = onset_secs_to_samples(x['affect_2']['onset'] + trial_duration_secs, sfreq=r['raw'].info['sfreq'])
         t0 = x["affect_1"]["onset"]
         t1 = x["affect_2"]["onset"]
         t2 = x["affect_2"]["onset"] + trial_duration_secs
@@ -840,7 +837,6 @@ class BCMITrainingLoader(BaseBCMILoader):
         music_path = self.root_path / "stimuli" / musicfile
         rate, data = wavfile.read(music_path)
         mid_frame = 20 * rate
-        print(mid_frame)
         first_half = data[:mid_frame]
         second_half = data[mid_frame:]
 
@@ -854,7 +850,7 @@ class BCMITrainingLoader(BaseBCMILoader):
             run=_run,
             data=RawTrial(
               music_raw=music1,
-              raw_eeg=r["raw"].crop(t0, t1, include_tmax=False),
+              raw_eeg=r["raw"].copy().crop(t0, t1, include_tmax=False),
             ),
           )
         if music2.is_not_empty():
@@ -865,7 +861,7 @@ class BCMITrainingLoader(BaseBCMILoader):
             run=_run,
             data=RawTrial(
               music_raw=music2,
-              raw_eeg=r["raw"].crop(t1, t2, include_tmax=False),
+              raw_eeg=r["raw"].copy().crop(t1, t2, include_tmax=False),
             ),
           )
 
