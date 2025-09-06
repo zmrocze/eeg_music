@@ -296,7 +296,12 @@ class TestOnDiskTrial(unittest.TestCase):
     )
 
     trial = Trial(
-      dataset="bcmi-training", subject="test", session="1", run="1", data=trial_data
+      dataset="bcmi-training",
+      subject="test",
+      session="1",
+      run="1",
+      trial_id="test_trial",
+      data=trial_data,
     )
 
     # Test that we can access data through Trial

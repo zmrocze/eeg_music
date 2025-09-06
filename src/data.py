@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Union
+from typing import Union, Callable, cast
 import numpy as np
 from numpy.typing import NDArray
 from mne.io import BaseRaw
@@ -11,6 +11,8 @@ import pandas as pd
 from scipy.io import wavfile
 import mne
 from pandas import Index
+import json
+import shutil
 
 
 class MusicID(ABC):
@@ -185,6 +187,11 @@ class TrialData(ABC):
     """Get the EEG raw data."""
     pass
 
+  @abstractmethod
+  def save(self, base_dir: Path) -> None:
+    """Save trial data to directory."""
+    pass
+
 
 @dataclass
 class RawTrial(TrialData):
@@ -235,6 +242,16 @@ class OnDiskTrial(TrialData):
     """Load trial data from file paths and return a RawTrial."""
     return RawTrial(music_raw=self.get_music_raw(), raw_eeg=self.get_eeg_raw())
 
+  def save(self, base_dir: Path) -> None:
+    """Save trial data by copying files to target directory."""
+    eeg_dir = base_dir / "eeg"
+    audio_dir = base_dir / "audio"
+    eeg_dir.mkdir(parents=True, exist_ok=True)
+    audio_dir.mkdir(exist_ok=True)
+
+    shutil.copy2(self.eeg_file_path, eeg_dir / "eeg.edf")
+    shutil.copy2(self.music_file_path, audio_dir / "audio.wav")
+
 
 @dataclass
 class Trial:
@@ -244,6 +261,7 @@ class Trial:
   subject: str
   session: str
   run: str
+  trial_id: str
   data: TrialData
 
 
@@ -253,7 +271,9 @@ class EEGMusicDataset:
   def __init__(self, records=None):
     if records is None:
       self.df = pd.DataFrame(
-        columns=Index(["dataset", "subject", "session", "run", "trial_data"])
+        columns=Index(
+          ["dataset", "subject", "session", "run", "trial_id", "trial_data"]
+        )
       )
     else:
       data = []
@@ -277,6 +297,7 @@ class EEGMusicDataset:
         "subject": [trial.subject],
         "session": [trial.session],
         "run": [trial.run],
+        "trial_id": [trial.trial_id],
         "trial_data": [trial.data],
       }
     )
@@ -288,9 +309,76 @@ class EEGMusicDataset:
     merged_dataset.df = pd.concat([self.df, other.df], ignore_index=True)
     return merged_dataset
 
-  def map(self, func) -> "EEGMusicDataset":
+  def map(self, func: Callable[[pd.DataFrame], pd.DataFrame]) -> "EEGMusicDataset":
     """Map underlying dataframe."""
     mapped_dataset = EEGMusicDataset()
     df = func(self.df.copy())
     mapped_dataset.df = df
     return mapped_dataset
+
+  def save(self, base_dir: Path) -> None:
+    """Save dataset to directory with metadata and trial data."""
+    base_dir = Path(base_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save metadata
+    metadata = []
+    for idx, row in self.df.iterrows():
+      trial_dir = f"{row['dataset']}_{row['subject']}_{row['session']}_{row['run']}_{row['trial_id']}"
+      metadata.append(
+        {
+          "dataset": row["dataset"],
+          "subject": row["subject"],
+          "session": row["session"],
+          "run": row["run"],
+          "trial_id": row["trial_id"],
+          "trial_dir": trial_dir,
+        }
+      )
+
+      # Save trial data
+      trial_data: TrialData = cast(TrialData, row["trial_data"])
+      trial_data.save(base_dir / trial_dir)
+
+    with open(base_dir / "metadata.json", "w") as f:
+      json.dump(metadata, f, indent=2)
+
+  @classmethod
+  def load_ondisk(cls, base_dir: Path) -> "EEGMusicDataset":
+    """Load dataset from directory."""
+    base_dir = Path(base_dir)
+
+    with open(base_dir / "metadata.json") as f:
+      metadata = json.load(f)
+
+    dataset = cls()
+    for item in metadata:
+      trial_dir = base_dir / item["trial_dir"]
+      trial_data = OnDiskTrial(
+        music_file_path=trial_dir / "audio" / "audio.wav",
+        eeg_file_path=trial_dir / "eeg" / "eeg.edf",
+      )
+
+      trial = Trial(
+        dataset=item["dataset"],
+        subject=item["subject"],
+        session=item["session"],
+        run=item["run"],
+        trial_id=item["trial_id"],
+        data=trial_data,
+      )
+      dataset.add_trial(trial)
+
+    return dataset
+
+  def load_to_mem(self):
+    """Load all trial data into memory, converting OnDiskTrial to RawTrial."""
+
+    def load_trial_data(df):
+      return df.assign(
+        trial_data=df["trial_data"].map(
+          lambda data: data.load() if isinstance(data, OnDiskTrial) else data
+        )
+      )
+
+    return self.map(load_trial_data)

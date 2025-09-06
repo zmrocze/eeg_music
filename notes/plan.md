@@ -53,3 +53,15 @@ eeg, music <- batch
 A <- eegpt eeg
 B <- vocoder A [eeg] ## diffusion loop
 loss music B
+
+## plan w punktach
+
+1. Indexable dataset.
+ - [ ] combined training and calibration
+ - [ ] Random per subject test-val-train split.
+ - [ ] common preprocessing
+  * [ ] 
+ - [ ] Add fmri, scores etc.
+2. Preprocessing
+3. Basic model: UNet/Diffwave on 0.1-1s chunks training.
+4. Checkpointing. Evalution by ssim.

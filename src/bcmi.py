@@ -695,6 +695,7 @@ class BCMICalibrationLoader(BaseBCMILoader):
 
     duration = 21  # secs
     for subject, session, run, r in self.loader_data_iter():
+      trial_counter = 0
       for _, marker in r["processed_events"]["marker_events"].iterrows():
         t0 = marker["onset"]
         music_filename = CalibrationMusicId(
@@ -705,11 +706,13 @@ class BCMICalibrationLoader(BaseBCMILoader):
         music_raw = WavRAW(raw_data=music[1], sample_rate=music[0])
         # wav_filenames_ordered[
         if music_raw.is_not_empty():
+          trial_counter += 1
           yield Trial(
             dataset="bcmi-calibration",
             subject=subject,
             session=session,
             run=run,
+            trial_id=f"trial_{trial_counter}",
             data=RawTrial(
               music_raw=music_raw,
               raw_eeg=r["raw"].copy().crop(t0, t0 + duration, include_tmax=False),
@@ -819,6 +822,7 @@ class BCMITrainingLoader(BaseBCMILoader):
   def trial_iterator(self) -> Iterator[Trial]:
     trial_duration_secs = 20  # always
     for _subject, session, _run, r in self.loader_data_iter():
+      trial_counter = 0
       for x in r["processed_events"]["training_pairs"]:
         i, j = x["affect_1"]["code"], x["affect_2"]["code"]
         # music: i-j_session
@@ -843,22 +847,26 @@ class BCMITrainingLoader(BaseBCMILoader):
         music1 = WavRAW(raw_data=first_half, sample_rate=rate)
         music2 = WavRAW(raw_data=second_half, sample_rate=rate)
         if music1.is_not_empty():
+          trial_counter += 1
           yield Trial(
             dataset="bcmi-training",
             subject=_subject,
             session=session,
             run=_run,
+            trial_id=f"trial_{trial_counter}",
             data=RawTrial(
               music_raw=music1,
               raw_eeg=r["raw"].copy().crop(t0, t1, include_tmax=False),
             ),
           )
         if music2.is_not_empty():
+          trial_counter += 1
           yield Trial(
             dataset="bcmi-training",
             subject=_subject,
             session=session,
             run=_run,
+            trial_id=f"trial_{trial_counter}",
             data=RawTrial(
               music_raw=music2,
               raw_eeg=r["raw"].copy().crop(t1, t2, include_tmax=False),
