@@ -235,7 +235,7 @@ class OnDiskTrial(TrialData):
 
   def get_eeg_raw(self) -> BaseRaw:
     """Load and return the EEG raw data from file."""
-    raw = mne.io.read_raw(self.eeg_file_path, preload=True)
+    raw = mne.io.read_raw(self.eeg_file_path, preload=False)
     return raw
 
   def load(self) -> RawTrial:
