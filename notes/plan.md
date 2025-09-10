@@ -64,4 +64,5 @@ loss music B
  - [ ] Add fmri, scores etc.
 2. Preprocessing
 3. Basic model: UNet/Diffwave on 0.1-1s chunks training.
-4. Checkpointing. Evalution by ssim.
+4. model: EEGpt finetuned to generate spectrograms
+5. Checkpointing. Evalution by ssim.

@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Union, Callable, cast
+from typing import Dict, Union, Callable, TypeVar, Generic, List, TypedDict
 import numpy as np
 from numpy.typing import NDArray
 from mne.io import BaseRaw
@@ -15,8 +15,36 @@ import json
 import shutil
 
 
+class MusicData(ABC):
+  """Abstract base class for music data."""
+
+  @abstractmethod
+  def get_music(self) -> "WavRAW":
+    """Get the music as WavRAW data."""
+    pass
+
+  @abstractmethod
+  def save(self, filepath: Path) -> None:
+    """Save the music data to a file."""
+    pass
+
+
+class EegData(ABC):
+  """Abstract base class for EEG data."""
+
+  @abstractmethod
+  def get_eeg(self) -> "RawEeg":
+    """Get the EEG data as RawEeg."""
+    pass
+
+  @abstractmethod
+  def save(self, filepath: Path) -> None:
+    """Save the EEG data to a file."""
+    pass
+
+
 class MusicID(ABC):
-  """Abstract base class for music identifiers."""
+  """Abstract base class for within-dataset music identifiers."""
 
   @abstractmethod
   def to_filename(self) -> str:
@@ -156,14 +184,15 @@ class TrainingMusicId(MusicID):
   emotion_code_1: int
   emotion_code_2: int
   session: Union[int, str]
+  which_half: bool  # False: first half, True: second half of the music file
 
   def to_filename(self) -> str:
     """Convert training music ID to filename."""
-    return f"{self.emotion_code_1}-{self.emotion_code_2}_{self.session}.wav"
+    return f"{self.emotion_code_1}-{self.emotion_code_2}_{self.session}_{'second' if self.which_half else 'first'}.wav"
 
 
 @dataclass
-class WavRAW:
+class WavRAW(MusicData):
   """Data class containing raw WAV data and its rate."""
 
   raw_data: NDArray[np.floating]  # Audio data as numpy array of float values
@@ -173,88 +202,136 @@ class WavRAW:
     """Check if the WAV data is not empty."""
     return self.raw_data.size > 0
 
+  def get_music(self) -> "WavRAW":
+    """Get the music as WavRAW data."""
+    return self
 
-class TrialData(ABC):
-  """Abstract base class for trial data."""
-
-  @abstractmethod
-  def get_music_raw(self) -> WavRAW:
-    """Get the music raw data."""
-    pass
-
-  @abstractmethod
-  def get_eeg_raw(self) -> BaseRaw:
-    """Get the EEG raw data."""
-    pass
-
-  @abstractmethod
-  def save(self, base_dir: Path) -> None:
-    """Save trial data to directory."""
-    pass
+  def save(self, filepath: Path) -> None:
+    """Save the WAV data to a file."""
+    wavfile.write(filepath, self.sample_rate, self.raw_data)
 
 
 @dataclass
-class RawTrial(TrialData):
-  """Trial data stored in memory."""
+class OnDiskMusic(MusicData):
+  """Music data backed by a file on disk."""
 
-  music_raw: WavRAW
+  filepath: Path
+
+  def get_music(self) -> WavRAW:
+    """Load and return the music as WavRAW data."""
+    sample_rate, raw_data = wavfile.read(self.filepath)
+    return WavRAW(raw_data=raw_data.astype(np.floating), sample_rate=sample_rate)
+
+  def save(self, filepath: Path) -> None:
+    """Save the music data by copying the file."""
+    shutil.copy2(self.filepath, filepath)
+
+
+@dataclass
+class RawEeg(EegData):
+  """EEG data stored in memory."""
+
   raw_eeg: BaseRaw
 
-  def get_music_raw(self) -> WavRAW:
-    """Get the music raw data."""
-    return self.music_raw
+  def get_eeg(self) -> "RawEeg":
+    """Get the EEG data."""
+    return self
 
-  def get_eeg_raw(self) -> BaseRaw:
-    """Get the EEG raw data."""
-    return self.raw_eeg
+  def save(self, filepath: Path) -> None:
+    """Save the EEG data to a file."""
+    # mne.export.export_raw expects a Raw object, not a RawEeg wrapper
+    mne.export.export_raw(filepath, self.raw_eeg, fmt="edf", overwrite=True)
 
-  def save(self, base_dir: Path) -> None:
-    """Save trial to directory using BIDS format for EEG."""
-    eeg_dir = base_dir / "eeg"
-    audio_dir = base_dir / "audio"
-    eeg_dir.mkdir(parents=True, exist_ok=True)
-    audio_dir.mkdir(exist_ok=True)
 
-    mne.export.export_raw(eeg_dir / "eeg.edf", self.raw_eeg, fmt="edf", overwrite=False)
-    wavfile.write(
-      audio_dir / "audio.wav", self.music_raw.sample_rate, self.music_raw.raw_data
+@dataclass
+class OnDiskEeg(EegData):
+  """EEG data backed by a file on disk."""
+
+  filepath: Path
+
+  def get_eeg(self) -> "RawEeg":
+    """Load and return the EEG data as RawEeg."""
+    return RawEeg(raw_eeg=mne.io.read_raw(self.filepath, preload=False))
+
+  def save(self, filepath: Path) -> None:
+    """Save the EEG data by copying the file."""
+    shutil.copy2(self.filepath, filepath)
+
+
+# Type variables for generic Trial class
+M = TypeVar("M", bound=MusicData)
+E = TypeVar("E", bound=EegData)
+
+
+@dataclass
+class TrialData(Generic[E, M]):
+  """Data class containing music and EEG data."""
+
+  eeg_data: E
+  music_data: M
+
+
+@dataclass(frozen=True)
+class MusicFilename:
+  """Reference to music data in the music collection."""
+
+  filename: str
+
+  @classmethod
+  def from_musicid(cls, music_id: MusicID) -> "MusicFilename":
+    """Create a MusicFilename from a MusicID."""
+    return cls(filename=music_id.to_filename())
+
+
+class TrialMetadataRecord(TypedDict):
+  """Typed dict for trial metadata record in JSON."""
+
+  dataset: str
+  subject: str
+  session: str
+  run: str
+  trial_id: str
+  music_ref: str
+
+
+@dataclass
+class DatasetMetadata:
+  """Metadata for a saved EEG music dataset: metadata.json."""
+
+  trials: List[TrialMetadataRecord]
+  stimuli: Dict[str, List[str]]  # Mapping from dataset name to list of music filenames
+  num_trials: int
+
+  def to_dict(self) -> dict:
+    """Convert to dictionary for JSON serialization."""
+    return {
+      "trials": self.trials,
+      "stimuli": self.stimuli,
+      "num_trials": self.num_trials,
+    }
+
+  @classmethod
+  def from_dict(cls, data: dict) -> "DatasetMetadata":
+    """Create from dictionary loaded from JSON."""
+    return cls(
+      trials=data["trials"], stimuli=data["stimuli"], num_trials=data["num_trials"]
     )
 
+  def save_json(self, filepath: Path) -> None:
+    """Save metadata to JSON file."""
+    with open(filepath, "w") as f:
+      json.dump(self.to_dict(), f, indent=2)
 
-@dataclass
-class OnDiskTrial(TrialData):
-  """Trial data referenced by file paths."""
-
-  music_file_path: Path
-  eeg_file_path: Path
-
-  def get_music_raw(self) -> WavRAW:
-    """Load and return the music raw data from file."""
-    sample_rate, data = wavfile.read(self.music_file_path)
-    return WavRAW(raw_data=data, sample_rate=sample_rate)
-
-  def get_eeg_raw(self) -> BaseRaw:
-    """Load and return the EEG raw data from file."""
-    raw = mne.io.read_raw(self.eeg_file_path, preload=False)
-    return raw
-
-  def load(self) -> RawTrial:
-    """Load trial data from file paths and return a RawTrial."""
-    return RawTrial(music_raw=self.get_music_raw(), raw_eeg=self.get_eeg_raw())
-
-  def save(self, base_dir: Path) -> None:
-    """Save trial data by copying files to target directory."""
-    eeg_dir = base_dir / "eeg"
-    audio_dir = base_dir / "audio"
-    eeg_dir.mkdir(parents=True, exist_ok=True)
-    audio_dir.mkdir(exist_ok=True)
-
-    shutil.copy2(self.eeg_file_path, eeg_dir / "eeg.edf")
-    shutil.copy2(self.music_file_path, audio_dir / "audio.wav")
+  @classmethod
+  def load_json(cls, filepath: Path) -> "DatasetMetadata":
+    """Load metadata from JSON file."""
+    with open(filepath, "r") as f:
+      data = json.load(f)
+    return cls.from_dict(data)
 
 
 @dataclass
-class Trial:
+class TrialRow(Generic[E]):
   """Data class containing music ID, raw EEG data, and emotion code."""
 
   dataset: str
@@ -262,54 +339,125 @@ class Trial:
   session: str
   run: str
   trial_id: str
-  data: TrialData
+  eeg_data: E
+  music_ref: MusicFilename
+
+
+def make_eeg_path(
+  base_dir: Path, dataset: str, subject: str, session: str, run: str, trial_id: str
+) -> Path:
+  """Construct the EEG file path following dataset/subject/session/run/trial_id/eeg.edf structure."""
+  return base_dir / dataset / subject / session / run / trial_id / "eeg.edf"
+
+
+def copy_from_dataloader_into_dir(dataset_name: str, loader, base_dir: Path):
+  """
+  Iterates over dataset loader trials and music collection,
+  saving these into a specified directory.
+
+  The directory can already contain a saved dataset.
+  """
+
+  base_dir.mkdir(parents=True, exist_ok=True)
+  stimuli_dataset_dir = base_dir / "stimuli" / dataset_name
+  eeg_dir = base_dir / "eeg"
+  stimuli_dataset_dir.mkdir(parents=True, exist_ok=True)
+  eeg_dir.mkdir(exist_ok=True)
+
+  metadata_path = base_dir / "metadata.json"
+  existing_metadata = (
+    DatasetMetadata.load_json(metadata_path)
+    if metadata_path.exists()
+    else DatasetMetadata(trials=[], stimuli={}, num_trials=0)
+  )
+
+  # Save music files
+  for music_ref, music_data in loader.music_iterator():
+    stimuli_file = stimuli_dataset_dir / music_ref.filename
+    if not stimuli_file.exists():
+      music_data.save(stimuli_file)
+      if dataset_name not in existing_metadata.stimuli:
+        existing_metadata.stimuli[dataset_name] = []
+      if music_ref.filename not in existing_metadata.stimuli[dataset_name]:
+        existing_metadata.stimuli[dataset_name].append(music_ref.filename)
+
+  # Save trials
+  for trial in loader.trial_iterator():
+    trial_record: TrialMetadataRecord = {
+      "dataset": trial.dataset,
+      "subject": trial.subject,
+      "session": trial.session,
+      "run": trial.run,
+      "trial_id": trial.trial_id,
+      "music_ref": trial.music_ref.filename,
+    }
+
+    eeg_path = make_eeg_path(
+      eeg_dir, trial.dataset, trial.subject, trial.session, trial.run, trial.trial_id
+    )
+    eeg_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save EEG data - all loaders now return EegData objects
+    trial.eeg_data.save(eeg_path)
+
+    existing_metadata.trials.append(trial_record)
+    existing_metadata.num_trials += 1
+
+  existing_metadata.save_json(metadata_path)
+
+
+@dataclass(frozen=True)
+class MusicRef:
+  """Reference to music data in the full multi-dataset collection."""
+
+  filename: MusicFilename
+  dataset: str
 
 
 class EEGMusicDataset:
-  """Dataset containing EEG trials with metadata."""
+  """
+  Dataset containing EEG trials with metadata.
 
-  def __init__(self, records=None):
-    if records is None:
-      self.df = pd.DataFrame(
-        columns=Index(
-          ["dataset", "subject", "session", "run", "trial_id", "trial_data"]
-        )
+  Can be stored into a directory with structure:
+  base_dir/
+    metadata.json
+    stimuli/
+      dataset_name/
+        music files...
+    eeg/
+      dataset_name/
+        subject/
+          session/
+            run/
+              trial_id/
+                eeg.edf
+  """
+
+  def __init__(self):
+    """
+    Trial ids with eeg data (raw or on-disk) and music,
+    pointed by reference into a music collection dict (which stores music raw or on-disk).
+    That's because music files are often reused between trials.
+    """
+    self.df = pd.DataFrame(
+      columns=Index(
+        ["dataset", "subject", "session", "run", "trial_id", "music_ref", "eeg_data"]
       )
-    else:
-      data = []
-      for record in records:
-        data.append(
-          {
-            "subject": record.subject,
-            "run": record.run,
-            "session": record.session,
-            "trial_id": record.trial_id,
-            "trial": record,
-          }
-        )
-      self.df = pd.DataFrame(data)
-
-  def add_trial(self, trial: Trial):
-    """Add a trial to the dataset."""
-    new_row = pd.DataFrame(
-      {
-        "dataset": [trial.dataset],
-        "subject": [trial.subject],
-        "session": [trial.session],
-        "run": [trial.run],
-        "trial_id": [trial.trial_id],
-        "trial_data": [trial.data],
-      }
     )
-    self.df = pd.concat([self.df, new_row], ignore_index=True)
+    self.music_collection: Dict[MusicRef, MusicData] = {}
 
   def merge(self, other: "EEGMusicDataset") -> "EEGMusicDataset":
     """Merge this dataset with another dataset."""
     merged_dataset = EEGMusicDataset()
     merged_dataset.df = pd.concat([self.df, other.df], ignore_index=True)
+    # this is enough because music refs are unique outside of dataset as well
+    merged_dataset.music_collection = {
+      **self.music_collection,
+      **other.music_collection,
+    }
     return merged_dataset
 
-  def map(self, func: Callable[[pd.DataFrame], pd.DataFrame]) -> "EEGMusicDataset":
+  def map_df(self, func: Callable[[pd.DataFrame], pd.DataFrame]) -> "EEGMusicDataset":
     """Map underlying dataframe."""
     mapped_dataset = EEGMusicDataset()
     df = func(self.df.copy())
@@ -318,67 +466,103 @@ class EEGMusicDataset:
 
   def save(self, base_dir: Path) -> None:
     """Save dataset to directory with metadata and trial data."""
-    base_dir = Path(base_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = base_dir / "metadata.json"
+
+    if metadata_path.exists():
+      print(f"Overwriting existing metadata at {metadata_path}")
+
+    # Create stimuli directories and save music
+    stimuli_dir = base_dir / "stimuli"
+    for music_ref, music_data in self.music_collection.items():
+      music_dir = stimuli_dir / music_ref.dataset
+      music_dir.mkdir(parents=True, exist_ok=True)
+      music_data.save(music_dir / music_ref.filename.filename)
+
+    # Save EEG data
+    eeg_dir = base_dir / "eeg"
+    for _, row in self.df.iterrows():
+      eeg_path = make_eeg_path(
+        eeg_dir, row.dataset, row.subject, row.session, row.run, row.trial_id
+      )
+      eeg_path.parent.mkdir(parents=True, exist_ok=True)
+      row.eeg_data.save(eeg_path)
 
     # Save metadata
-    metadata = []
-    for idx, row in self.df.iterrows():
-      trial_dir = f"{row['dataset']}_{row['subject']}_{row['session']}_{row['run']}_{row['trial_id']}"
-      metadata.append(
+    stimuli_by_dataset = {}
+    for music_ref in self.music_collection.keys():
+      if music_ref.dataset not in stimuli_by_dataset:
+        stimuli_by_dataset[music_ref.dataset] = []
+      stimuli_by_dataset[music_ref.dataset].append(music_ref.filename.filename)
+
+    metadata = DatasetMetadata(
+      trials=[
         {
-          "dataset": row["dataset"],
-          "subject": row["subject"],
-          "session": row["session"],
-          "run": row["run"],
-          "trial_id": row["trial_id"],
-          "trial_dir": trial_dir,
+          "dataset": row.dataset,
+          "subject": row.subject,
+          "session": row.session,
+          "run": row.run,
+          "trial_id": row.trial_id,
+          "music_ref": row.music_ref.filename,
         }
-      )
-
-      # Save trial data
-      trial_data: TrialData = cast(TrialData, row["trial_data"])
-      trial_data.save(base_dir / trial_dir)
-
-    with open(base_dir / "metadata.json", "w") as f:
-      json.dump(metadata, f, indent=2)
+        for _, row in self.df.iterrows()
+      ],
+      stimuli=stimuli_by_dataset,
+      num_trials=len(self.df),
+    )
+    metadata.save_json(metadata_path)
 
   @classmethod
   def load_ondisk(cls, base_dir: Path) -> "EEGMusicDataset":
-    """Load dataset from directory."""
-    base_dir = Path(base_dir)
-
-    with open(base_dir / "metadata.json") as f:
-      metadata = json.load(f)
-
+    """Load dataset from directory, using music and EEG data on-disk representations."""
     dataset = cls()
-    for item in metadata:
-      trial_dir = base_dir / item["trial_dir"]
-      trial_data = OnDiskTrial(
-        music_file_path=trial_dir / "audio" / "audio.wav",
-        eeg_file_path=trial_dir / "eeg" / "eeg.edf",
+
+    # Read metadata
+    metadata = DatasetMetadata.load_json(base_dir / "metadata.json")
+
+    # Create music collection from metadata stimuli
+    stimuli_dir = base_dir / "stimuli"
+    for dataset_name, music_filenames in metadata.stimuli.items():
+      for music_filename in music_filenames:
+        music_file_path = stimuli_dir / dataset_name / music_filename
+        music_ref = MusicRef(
+          filename=MusicFilename(filename=music_filename), dataset=dataset_name
+        )
+        dataset.music_collection[music_ref] = OnDiskMusic(filepath=music_file_path)
+
+    # Create dataframe from trial metadata
+    eeg_dir = base_dir / "eeg"
+    rows = []
+    for trial_record in metadata.trials:
+      eeg_path = make_eeg_path(
+        eeg_dir,
+        trial_record["dataset"],
+        trial_record["subject"],
+        trial_record["session"],
+        trial_record["run"],
+        trial_record["trial_id"],
+      )
+      rows.append(
+        {
+          "dataset": trial_record["dataset"],
+          "subject": trial_record["subject"],
+          "session": trial_record["session"],
+          "run": trial_record["run"],
+          "trial_id": trial_record["trial_id"],
+          "music_ref": MusicFilename(filename=trial_record["music_ref"]),
+          "eeg_data": OnDiskEeg(filepath=eeg_path),
+        }
       )
 
-      trial = Trial(
-        dataset=item["dataset"],
-        subject=item["subject"],
-        session=item["session"],
-        run=item["run"],
-        trial_id=item["trial_id"],
-        data=trial_data,
-      )
-      dataset.add_trial(trial)
-
+    dataset.df = pd.DataFrame(rows)
     return dataset
 
   def load_to_mem(self):
-    """Load all trial data into memory, converting OnDiskTrial to RawTrial."""
+    """Load all eeg and music data into memory."""
+    # Convert all MusicData to WavRAW in the music collection
+    for music_ref, music_data in self.music_collection.items():
+      self.music_collection[music_ref] = music_data.get_music()
 
-    def load_trial_data(df):
-      return df.assign(
-        trial_data=df["trial_data"].map(
-          lambda data: data.load() if isinstance(data, OnDiskTrial) else data
-        )
-      )
-
-    return self.map(load_trial_data)
+    # Convert all EegData to RawEeg in the dataframe
+    for idx, row in self.df.iterrows():
+      self.df.at[idx, "eeg_data"] = row.eeg_data.get_eeg()

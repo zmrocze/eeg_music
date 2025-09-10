@@ -70,16 +70,27 @@ References:
 """
 
 from abc import ABC, abstractmethod
-from data import CalibrationMusicId, RawTrial, Trial, TrainingMusicId, WavRAW
+from data import (
+  CalibrationMusicId,
+  EegData,
+  MusicFilename,
+  RawEeg,
+  TrainingMusicId,
+  TrialRow,
+  WavRAW,
+)
 from helper import onset_secs_to_samples
 from mne_bids import get_entity_vals, BIDSPath, read_raw_bids
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Iterator, Tuple
+from typing import Dict, List, Optional, Any, Iterator, Tuple, TypeVar, Generic
 from scipy.io import wavfile
 
+# TypeVar for EEG data in BCMI loaders
+E = TypeVar("E", bound=EegData)
 
-class BaseBCMILoader(ABC):
+
+class BaseBCMILoader(ABC, Generic[E]):
   """
   Abstract base class for BCMI dataset loaders.
 
@@ -209,8 +220,18 @@ class BaseBCMILoader(ABC):
       return ["1", "2", "3", "4", "5"]  # Common fallback
 
   @abstractmethod
-  def trial_iterator(self) -> Iterator[Trial]:
+  def trial_iterator(self) -> Iterator[TrialRow[E]]:
     """Iterate over trial eeg snippets."""
+    pass
+
+  @abstractmethod
+  def music_iterator(self) -> Iterator[Tuple[MusicFilename, WavRAW]]:
+    """
+    Iterate over all music files in the dataset.
+
+    Yields:
+        Tuple of (MusicFilename, WavRAW) pairs containing music reference and audio data
+    """
     pass
 
   @abstractmethod
@@ -632,7 +653,7 @@ class BaseBCMILoader(ABC):
     return self.subjects
 
 
-class BCMICalibrationLoader(BaseBCMILoader):
+class BCMICalibrationLoader(BaseBCMILoader[RawEeg]):
   """
   Loader for BCMI Calibration dataset.
 
@@ -683,7 +704,7 @@ class BCMICalibrationLoader(BaseBCMILoader):
       Brain-Computer Interfaces.
   """
 
-  def trial_iterator(self) -> Iterator[Trial]:
+  def trial_iterator(self) -> Iterator[TrialRow[RawEeg]]:
     """
     Iterate over EEG trial snippets for calibration data.
 
@@ -698,26 +719,44 @@ class BCMICalibrationLoader(BaseBCMILoader):
       trial_counter = 0
       for _, marker in r["processed_events"]["marker_events"].iterrows():
         t0 = marker["onset"]
-        music_filename = CalibrationMusicId(
-          number=round(marker["trial_type"]) - 100
-        ).to_filename()
-        music_path = self.root_path / "stimuli" / music_filename
-        music = wavfile.read(music_path)
-        music_raw = WavRAW(raw_data=music[1], sample_rate=music[0])
-        # wav_filenames_ordered[
-        if music_raw.is_not_empty():
-          trial_counter += 1
-          yield Trial(
-            dataset="bcmi-calibration",
-            subject=subject,
-            session=session,
-            run=run,
-            trial_id=f"trial_{trial_counter}",
-            data=RawTrial(
-              music_raw=music_raw,
-              raw_eeg=r["raw"].copy().crop(t0, t0 + duration, include_tmax=False),
-            ),
-          )
+        music_filename = MusicFilename.from_musicid(
+          CalibrationMusicId(number=round(marker["trial_type"]) - 100)
+        )
+        trial_counter += 1
+        yield TrialRow(
+          dataset="bcmi-calibration",
+          subject=subject,
+          session=session,
+          run=run,
+          trial_id=f"trial_{trial_counter}",
+          eeg_data=RawEeg(
+            raw_eeg=r["raw"].copy().crop(t0, t0 + duration, include_tmax=False)
+          ),
+          music_ref=music_filename,
+        )
+
+  def music_iterator(self) -> Iterator[Tuple[MusicFilename, WavRAW]]:
+    """
+    Iterate over all music files in the calibration dataset.
+
+    Yields:
+        Tuple of (MusicFilename, WavRAW) pairs for each calibration music file
+    """
+    stimuli_dir = self.root_path / "stimuli"
+
+    if not stimuli_dir.exists():
+      return
+
+    # Iterate through all numbered music files (0-107, total 108 files in wav_filenames_ordered_calibration)
+    for i in range(108):
+      music_id = CalibrationMusicId(number=i)
+      music_ref = MusicFilename.from_musicid(music_id)
+      music_path = stimuli_dir / music_ref.filename
+
+      if music_path.exists():
+        sample_rate, audio_data = wavfile.read(music_path)
+        wav_raw = WavRAW(raw_data=audio_data.astype(float), sample_rate=sample_rate)
+        yield music_ref, wav_raw
 
   def _get_experimental_info(self) -> Dict[str, Any]:
     return {
@@ -774,7 +813,7 @@ class BCMICalibrationLoader(BaseBCMILoader):
       return {}
 
 
-class BCMITrainingLoader(BaseBCMILoader):
+class BCMITrainingLoader(BaseBCMILoader[RawEeg]):
   """
   Loader for BCMI Training dataset.
 
@@ -819,14 +858,13 @@ class BCMITrainingLoader(BaseBCMILoader):
       >>> print(f"Training contrasts: {set(all_contrasts)}")
   """
 
-  def trial_iterator(self) -> Iterator[Trial]:
+  def trial_iterator(self) -> Iterator[TrialRow[RawEeg]]:
     trial_duration_secs = 20  # always
-    for _subject, session, _run, r in self.loader_data_iter():
+    for subject, session, run, r in self.loader_data_iter():
       trial_counter = 0
       for x in r["processed_events"]["training_pairs"]:
         i, j = x["affect_1"]["code"], x["affect_2"]["code"]
         # music: i-j_session
-        # print(x['affect_2']['onset'] - x['affect_1']['onset'])
         assert (
           onset_secs_to_samples(
             x["affect_2"]["onset"] - x["affect_1"]["onset"],
@@ -837,41 +875,78 @@ class BCMITrainingLoader(BaseBCMILoader):
         t0 = x["affect_1"]["onset"]
         t1 = x["affect_2"]["onset"]
         t2 = x["affect_2"]["onset"] + trial_duration_secs
-        musicfile = TrainingMusicId(int(i), int(j), session).to_filename()
-        music_path = self.root_path / "stimuli" / musicfile
-        rate, data = wavfile.read(music_path)
-        mid_frame = 20 * rate
-        first_half = data[:mid_frame]
-        second_half = data[mid_frame:]
+        assert t1 < r["raw"].times[-1], (
+          f"Slice t1-t2 would be empty! {t1} >= r['raw'].times[-1]={r['raw'].times[-1]}"
+        )
 
-        music1 = WavRAW(raw_data=first_half, sample_rate=rate)
-        music2 = WavRAW(raw_data=second_half, sample_rate=rate)
-        if music1.is_not_empty():
-          trial_counter += 1
-          yield Trial(
-            dataset="bcmi-training",
-            subject=_subject,
-            session=session,
-            run=_run,
-            trial_id=f"trial_{trial_counter}",
-            data=RawTrial(
-              music_raw=music1,
-              raw_eeg=r["raw"].copy().crop(t0, t1, include_tmax=False),
-            ),
-          )
-        if music2.is_not_empty():
-          trial_counter += 1
-          yield Trial(
-            dataset="bcmi-training",
-            subject=_subject,
-            session=session,
-            run=_run,
-            trial_id=f"trial_{trial_counter}",
-            data=RawTrial(
-              music_raw=music2,
-              raw_eeg=r["raw"].copy().crop(t1, t2, include_tmax=False),
-            ),
-          )
+        def musicfile(h):
+          return MusicFilename.from_musicid(TrainingMusicId(int(i), int(j), session, h))
+
+        # music_path = self.root_path / "stimuli" / musicfile
+        # rate, data = wavfile.read(music_path)
+        # mid_frame = 20 * rate
+        # first_half = data[:mid_frame]
+        # second_half = data[mid_frame:]
+
+        trial_counter += 1
+        yield TrialRow(
+          dataset="bcmi-training",
+          subject=subject,
+          session=session,
+          run=run,
+          trial_id=f"trial_{trial_counter}",
+          eeg_data=RawEeg(raw_eeg=r["raw"].copy().crop(t0, t1, include_tmax=False)),
+          music_ref=musicfile(False),
+        )
+        trial_counter += 1
+        yield TrialRow(
+          dataset="bcmi-training",
+          subject=subject,
+          session=session,
+          run=run,
+          trial_id=f"trial_{trial_counter}",
+          eeg_data=RawEeg(raw_eeg=r["raw"].copy().crop(t1, t2, include_tmax=False)),
+          music_ref=musicfile(True),
+        )
+
+  def music_iterator(self) -> Iterator[Tuple[MusicFilename, WavRAW]]:
+    """
+    Iterate over all music files in the training dataset.
+
+    Yields:
+        Tuple of (MusicFilename, WavRAW) pairs for each training music file
+    """
+    stimuli_dir = self.root_path / "stimuli"
+
+    if not stimuli_dir.exists():
+      return
+
+    # Training files follow pattern: emotion1-emotion2_session.wav
+    for wav_file in stimuli_dir.glob("*.wav"):
+      filename = wav_file.name
+      # Parse filename like "1-2_3.wav" -> emotion1=1, emotion2=2, session=3
+      name_without_ext = filename.replace(".wav", "")
+      emotions_part, session_part = name_without_ext.split("_")
+      emotion1, emotion2 = map(int, emotions_part.split("-"))
+      session = int(session_part)
+
+      # Create MusicFilename for both halves
+      sample_rate, audio_data = wavfile.read(wav_file)
+      mid_frame = len(audio_data) // 2
+
+      def some_half(which_half):
+        return (
+          MusicFilename.from_musicid(
+            TrainingMusicId(emotion1, emotion2, session, which_half)
+          ),
+          WavRAW(
+            raw_data=(audio_data[mid_frame:] if which_half else audio_data[:mid_frame]),
+            sample_rate=sample_rate,
+          ),
+        )
+
+      yield some_half(False)
+      yield some_half(True)
 
   def _get_experimental_info(self) -> Dict[str, Any]:
     return {
@@ -924,7 +999,7 @@ class BCMITrainingLoader(BaseBCMILoader):
       return {}
 
 
-class BCMITestingLoader(BaseBCMILoader):
+class BCMITestingLoader(BaseBCMILoader[EegData]):
   """
   Loader for BCMI Testing dataset.
 
@@ -934,7 +1009,7 @@ class BCMITestingLoader(BaseBCMILoader):
   - Attempt to change affection phase
   """
 
-  def trial_iterator(self) -> Iterator[Trial]:
+  def trial_iterator(self) -> Iterator[TrialRow[EegData]]:
     """
     Iterate over EEG trial snippets for testing data.
 
@@ -943,6 +1018,18 @@ class BCMITestingLoader(BaseBCMILoader):
     """
     raise NotImplementedError(
       "trial_iterator is not yet implemented for BCMITestingLoader. "
+      "Use the standard data loading methods instead."
+    )
+
+  def music_iterator(self) -> Iterator[Tuple[MusicFilename, WavRAW]]:
+    """
+    Iterate over all music files in the testing dataset.
+
+    This method is not yet implemented for testing dataset due to its complex
+    music generation paradigm.
+    """
+    raise NotImplementedError(
+      "music_iterator is not yet implemented for BCMITestingLoader. "
       "Use the standard data loading methods instead."
     )
 
@@ -1004,7 +1091,7 @@ class BCMITestingLoader(BaseBCMILoader):
       return {}
 
 
-class BCMITempoLoader(BaseBCMILoader):
+class BCMITempoLoader(BaseBCMILoader[EegData]):
   """
   Loader for BCMI Tempo dataset.
 
@@ -1012,7 +1099,7 @@ class BCMITempoLoader(BaseBCMILoader):
   music tempo through imagined movement.
   """
 
-  def trial_iterator(self) -> Iterator[Trial]:
+  def trial_iterator(self) -> Iterator[TrialRow[EegData]]:
     """
     Iterate over EEG trial snippets for tempo control data.
 
@@ -1021,6 +1108,18 @@ class BCMITempoLoader(BaseBCMILoader):
     """
     raise NotImplementedError(
       "trial_iterator is not yet implemented for BCMITempoLoader. "
+      "Use the standard data loading methods instead."
+    )
+
+  def music_iterator(self) -> Iterator[Tuple[MusicFilename, WavRAW]]:
+    """
+    Iterate over all music files in the tempo dataset.
+
+    This method is not yet implemented for tempo dataset due to its specialized
+    tempo modulation paradigm.
+    """
+    raise NotImplementedError(
+      "music_iterator is not yet implemented for BCMITempoLoader. "
       "Use the standard data loading methods instead."
     )
 
@@ -1067,14 +1166,14 @@ class BCMITempoLoader(BaseBCMILoader):
       return {}
 
 
-class BCMIScoresLoader(BaseBCMILoader):
+class BCMIScoresLoader(BaseBCMILoader[EegData]):
   """
   Loader for BCMI Scores dataset.
 
   Experimental paradigm: Listening to movie scores for emotion induction.
   """
 
-  def trial_iterator(self) -> Iterator[Trial]:
+  def trial_iterator(self) -> Iterator[TrialRow[EegData]]:
     """
     Iterate over EEG trial snippets for movie scores data.
 
@@ -1083,6 +1182,18 @@ class BCMIScoresLoader(BaseBCMILoader):
     """
     raise NotImplementedError(
       "trial_iterator is not yet implemented for BCMIScoresLoader. "
+      "Use the standard data loading methods instead."
+    )
+
+  def music_iterator(self) -> Iterator[Tuple[MusicFilename, WavRAW]]:
+    """
+    Iterate over all music files in the scores dataset.
+
+    This method is not yet implemented for scores dataset due to its specialized
+    movie score paradigm.
+    """
+    raise NotImplementedError(
+      "music_iterator is not yet implemented for BCMIScoresLoader. "
       "Use the standard data loading methods instead."
     )
 
@@ -1128,7 +1239,7 @@ class BCMIScoresLoader(BaseBCMILoader):
       return {}
 
 
-class BCMIFMRILoader(BaseBCMILoader):
+class BCMIFMRILoader(BaseBCMILoader[EegData]):
   """
   Loader for BCMI fMRI dataset.
 
@@ -1141,7 +1252,7 @@ class BCMIFMRILoader(BaseBCMILoader):
   - Subject format: sub-01, sub-02, etc. (not sub-001)
   """
 
-  def trial_iterator(self) -> Iterator[Trial]:
+  def trial_iterator(self) -> Iterator[TrialRow[EegData]]:
     """
     Iterate over EEG trial snippets for fMRI data.
 
@@ -1150,6 +1261,18 @@ class BCMIFMRILoader(BaseBCMILoader):
     """
     raise NotImplementedError(
       "trial_iterator is not yet implemented for BCMIFMRILoader. "
+      "Use the standard data loading methods instead."
+    )
+
+  def music_iterator(self) -> Iterator[Tuple[MusicFilename, WavRAW]]:
+    """
+    Iterate over all music files in the fMRI dataset.
+
+    This method is not yet implemented for fMRI dataset due to its complex
+    task-specific music paradigm.
+    """
+    raise NotImplementedError(
+      "music_iterator is not yet implemented for BCMIFMRILoader. "
       "Use the standard data loading methods instead."
     )
 
