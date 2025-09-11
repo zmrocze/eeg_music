@@ -55,6 +55,9 @@ from bcmi import (
 from musing import MUSINGDataset
 from nmed_t import NMEDTLoader
 from openmiir import OpenMIIRLoader
+from data import EEGMusicDataset, RawEeg, WavRAW, MusicRef, MusicFilename
+import numpy as np
+import mne
 
 DATASET_ROOT = Path("/home/zmrocze/studia/uwr/magisterka/datasets")
 BCMI_ROOT = DATASET_ROOT / "bcmi"
@@ -764,31 +767,24 @@ class TestTrialIterator(unittest.TestCase):
     trial_duration = 0
     try:
       for trial in loader.trial_iterator():
-        # Check that we get EEGTrial objects with expected attributes
-        self.assertHasAttr(trial, "data", "Trial should have data attribute")
-        self.assertTrue(
-          hasattr(trial.data, "get_music_raw"),
-          "Trial data should have get_music_raw method",
-        )
-        self.assertTrue(
-          hasattr(trial.data, "get_eeg_raw"),
-          "Trial data should have get_eeg_raw method",
-        )
+        # Check that we get TrialRow objects with expected attributes
+        self.assertHasAttr(trial, "dataset", "Trial should have dataset attribute")
+        self.assertHasAttr(trial, "subject", "Trial should have subject attribute")
+        self.assertHasAttr(trial, "session", "Trial should have session attribute")
+        self.assertHasAttr(trial, "run", "Trial should have run attribute")
+        self.assertHasAttr(trial, "trial_id", "Trial should have trial_id attribute")
+        self.assertHasAttr(trial, "music_ref", "Trial should have music_ref attribute")
+        self.assertHasAttr(trial, "eeg_data", "Trial should have eeg_data attribute")
 
-        # Check music_raw structure
-        music_raw = trial.data.get_music_raw()
-        self.assertHasAttr(
-          music_raw, "raw_data", "music_raw should have raw_data attribute"
-        )
-        self.assertHasAttr(
-          music_raw,
-          "sample_rate",
-          "music_raw should have sample_rate attribute",
-        )
-        self.assertTrue(music_raw.is_not_empty(), "Music data should not be empty")
+        # Check that we can get music data through the music collection
+        # (Note: music collection is on the loader, not the individual trial)
+        music_ref = trial.music_ref
+        self.assertIsNotNone(music_ref, "Trial should have music reference")
 
-        # Check raw_eeg is a proper MNE Raw object
-        raw_eeg = trial.data.get_eeg_raw()
+        # Check EEG data access
+        eeg_data = trial.eeg_data.get_eeg()
+        self.assertIsNotNone(eeg_data, "Should be able to get EEG data")
+        raw_eeg = eeg_data.raw_eeg
         self.assertTrue(hasattr(raw_eeg, "info"), "raw_eeg should be MNE Raw object")
         self.assertTrue(hasattr(raw_eeg, "times"), "raw_eeg should have times")
         self.assertGreater(len(raw_eeg.times), 0, "EEG data should not be empty")
@@ -826,31 +822,23 @@ class TestTrialIterator(unittest.TestCase):
     trial_duration = 0
     try:
       for trial in loader.trial_iterator():
-        # Check that we get EEGTrial objects with expected attributes
-        self.assertHasAttr(trial, "data", "Trial should have data attribute")
-        self.assertTrue(
-          hasattr(trial.data, "get_music_raw"),
-          "Trial data should have get_music_raw method",
-        )
-        self.assertTrue(
-          hasattr(trial.data, "get_eeg_raw"),
-          "Trial data should have get_eeg_raw method",
-        )
+        # Check that we get TrialRow objects with expected attributes
+        self.assertHasAttr(trial, "dataset", "Trial should have dataset attribute")
+        self.assertHasAttr(trial, "subject", "Trial should have subject attribute")
+        self.assertHasAttr(trial, "session", "Trial should have session attribute")
+        self.assertHasAttr(trial, "run", "Trial should have run attribute")
+        self.assertHasAttr(trial, "trial_id", "Trial should have trial_id attribute")
+        self.assertHasAttr(trial, "music_ref", "Trial should have music_ref attribute")
+        self.assertHasAttr(trial, "eeg_data", "Trial should have eeg_data attribute")
 
-        # Check music_raw structure
-        music_raw = trial.data.get_music_raw()
-        self.assertHasAttr(
-          music_raw, "raw_data", "music_raw should have raw_data attribute"
-        )
-        self.assertHasAttr(
-          music_raw,
-          "sample_rate",
-          "music_raw should have sample_rate attribute",
-        )
-        self.assertTrue(music_raw.is_not_empty(), "Music data should not be empty")
+        # Check that we can get music data through the music collection
+        music_ref = trial.music_ref
+        self.assertIsNotNone(music_ref, "Trial should have music reference")
 
-        # Check raw_eeg is a proper MNE Raw object
-        raw_eeg = trial.data.get_eeg_raw()
+        # Check EEG data access
+        eeg_data = trial.eeg_data.get_eeg()
+        self.assertIsNotNone(eeg_data, "Should be able to get EEG data")
+        raw_eeg = eeg_data.raw_eeg
         self.assertTrue(hasattr(raw_eeg, "info"), "raw_eeg should be MNE Raw object")
         self.assertTrue(hasattr(raw_eeg, "times"), "raw_eeg should have times")
         self.assertGreater(len(raw_eeg.times), 0, "EEG data should not be empty")
@@ -916,18 +904,30 @@ class TestTrialIterator(unittest.TestCase):
         for i, trial in enumerate(loader.trial_iterator()):
           if i >= 2:  # Only test first 2 trials
             break
-          eeg_raw = trial.data.get_eeg_raw()
-          music_raw = trial.data.get_music_raw()
-          first_call_trials.append((eeg_raw.times.shape, music_raw.raw_data.shape))
+          eeg_raw = trial.eeg_data.get_eeg().raw_eeg
+          # Get music from loader's collection using the music_ref
+          music_data = None
+          for music_ref, music in loader.music_iterator():
+            if music_ref.filename == trial.music_ref.filename:
+              music_data = music
+              break
+          if music_data:
+            first_call_trials.append((eeg_raw.times.shape, music_data.raw_data.shape))
 
         # Get first few trials from second call
         second_call_trials = []
         for i, trial in enumerate(loader.trial_iterator()):
           if i >= 2:
             break
-          eeg_raw = trial.data.get_eeg_raw()
-          music_raw = trial.data.get_music_raw()
-          second_call_trials.append((eeg_raw.times.shape, music_raw.raw_data.shape))
+          eeg_raw = trial.eeg_data.get_eeg().raw_eeg
+          # Get music from loader's collection using the music_ref
+          music_data = None
+          for music_ref, music in loader.music_iterator():
+            if music_ref.filename == trial.music_ref.filename:
+              music_data = music
+              break
+          if music_data:
+            second_call_trials.append((eeg_raw.times.shape, music_data.raw_data.shape))
 
         # Should produce the same structure
         self.assertEqual(
@@ -1108,3 +1108,60 @@ if __name__ == "__main__":
   else:
     # Run our custom test runner with dataset checking
     run_all_tests()
+
+
+class TestEEGMusicDatasetFiltering(unittest.TestCase):
+  def _mk_eeg(self, seconds: float, sfreq: float = 10.0) -> RawEeg:
+    n_times = int(seconds * sfreq)
+    info = mne.create_info(ch_names=["ch1"], sfreq=sfreq, ch_types="eeg")
+    raw = mne.io.RawArray(np.zeros((1, n_times), dtype=float), info)
+    return RawEeg(raw_eeg=raw)
+
+  def _mk_music(self, seconds: float, sr: int = 10) -> WavRAW:
+    n = int(seconds * sr)
+    return WavRAW(raw_data=np.zeros((n,), dtype=float), sample_rate=sr)
+
+  def test_remove_short_trials(self):
+    ds = EEGMusicDataset()
+    # build music collection
+    mref1 = MusicRef(MusicFilename("a.wav"), "d1")
+    mref2 = MusicRef(MusicFilename("b.wav"), "d1")
+    ds.music_collection[mref1] = self._mk_music(12.0)
+    ds.music_collection[mref2] = self._mk_music(8.0)
+
+    rows = [
+      {
+        "dataset": "d1",
+        "subject": "s1",
+        "session": "ses1",
+        "run": "r1",
+        "trial_id": "t1",
+        "music_ref": MusicFilename("a.wav"),
+        "eeg_data": self._mk_eeg(12.0),
+      },
+      {
+        "dataset": "d1",
+        "subject": "s1",
+        "session": "ses1",
+        "run": "r1",
+        "trial_id": "t2",
+        "music_ref": MusicFilename("b.wav"),
+        "eeg_data": self._mk_eeg(20.0),
+      },
+      {
+        "dataset": "d1",
+        "subject": "s1",
+        "session": "ses1",
+        "run": "r1",
+        "trial_id": "t3",
+        "music_ref": MusicFilename("a.wav"),
+        "eeg_data": self._mk_eeg(5.0),
+      },
+    ]
+    ds.df = pd.DataFrame(rows)
+
+    # threshold 10s: keep t1 (12s music, 12s eeg), remove t2 (8s music), remove t3 (5s eeg)
+    filtered = ds.remove_short_trials(10.0)
+    self.assertEqual(len(filtered), 1)
+    tr = filtered[0]
+    self.assertEqual(tr.trial_id, "t1")

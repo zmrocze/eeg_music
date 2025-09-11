@@ -3,7 +3,16 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Union, Callable, TypeVar, Generic, List, TypedDict
+from typing import (
+  Dict,
+  Union,
+  Callable,
+  TypeVar,
+  Generic,
+  List,
+  TypedDict,
+  Tuple,
+)
 import numpy as np
 from numpy.typing import NDArray
 from mne.io import BaseRaw
@@ -13,6 +22,7 @@ import mne
 from pandas import Index
 import json
 import shutil
+import torch.utils.data as torchdata
 
 
 class MusicData(ABC):
@@ -202,6 +212,10 @@ class WavRAW(MusicData):
     """Check if the WAV data is not empty."""
     return self.raw_data.size > 0
 
+  def length_seconds(self) -> float:
+    """Get the length of the WAV data in seconds."""
+    return self.raw_data.shape[0] / self.sample_rate
+
   def get_music(self) -> "WavRAW":
     """Get the music as WavRAW data."""
     return self
@@ -266,6 +280,12 @@ E = TypeVar("E", bound=EegData)
 @dataclass
 class TrialData(Generic[E, M]):
   """Data class containing music and EEG data."""
+
+  dataset: str
+  subject: str
+  session: str
+  run: str
+  trial_id: str
 
   eeg_data: E
   music_data: M
@@ -414,7 +434,7 @@ class MusicRef:
   dataset: str
 
 
-class EEGMusicDataset:
+class EEGMusicDataset(torchdata.Dataset):
   """
   Dataset containing EEG trials with metadata.
 
@@ -444,7 +464,40 @@ class EEGMusicDataset:
         ["dataset", "subject", "session", "run", "trial_id", "music_ref", "eeg_data"]
       )
     )
+
     self.music_collection: Dict[MusicRef, MusicData] = {}
+
+  @property
+  def df(self) -> pd.DataFrame:
+    """Get the dataframe."""
+    return self._df
+
+  @df.setter
+  def df(self, value: pd.DataFrame) -> None:
+    """Set the dataframe with proper indexing."""
+    indexed = value.set_index(
+      ["dataset", "subject", "session", "run", "trial_id"],
+      drop=False,
+      verify_integrity=True,
+    )
+    self._df = indexed
+
+  def __len__(self) -> int:
+    return len(self.df)
+
+  def __getitem__(self, idx: int) -> TrialData[EegData, MusicData]:
+    row = self.df.iloc[idx]
+    music_ref = MusicRef(filename=row.music_ref, dataset=row.dataset)
+    music_data = self.music_collection[music_ref]
+    return TrialData(
+      dataset=row.dataset,
+      subject=row.subject,
+      session=row.session,
+      run=row.run,
+      trial_id=row.trial_id,
+      eeg_data=row.eeg_data,
+      music_data=music_data,
+    )
 
   def merge(self, other: "EEGMusicDataset") -> "EEGMusicDataset":
     """Merge this dataset with another dataset."""
@@ -463,6 +516,30 @@ class EEGMusicDataset:
     df = func(self.df.copy())
     mapped_dataset.df = df
     return mapped_dataset
+
+  def subject_wise_split(
+    self, p: float, seed: int = 42
+  ) -> Tuple["EEGMusicDataset", "EEGMusicDataset"]:
+    """Split into train/test by subjects.
+
+    p: proportion of subjects in the training set
+    seed: RNG seed for reproducibility
+    """
+    np.random.seed(seed)
+    subjects_array = np.array(self.df["subject"].unique())
+    np.random.shuffle(subjects_array)
+    n_train = int(len(subjects_array) * p)
+    train_subj, test_subj = subjects_array[:n_train], subjects_array[n_train:]
+
+    def mk(df) -> "EEGMusicDataset":
+      ds = EEGMusicDataset()
+      ds.df = df.reset_index(drop=True)
+      ds.music_collection = self.music_collection
+      return ds
+
+    train_df = self.df[self.df["subject"].isin(train_subj.tolist())]
+    test_df = self.df[self.df["subject"].isin(test_subj.tolist())]
+    return mk(train_df), mk(test_df)
 
   def save(self, base_dir: Path) -> None:
     """Save dataset to directory with metadata and trial data."""
@@ -566,3 +643,26 @@ class EEGMusicDataset:
     # Convert all EegData to RawEeg in the dataframe
     for idx, row in self.df.iterrows():
       self.df.at[idx, "eeg_data"] = row.eeg_data.get_eeg()
+
+  def remove_short_trials(self, min_trial_length_seconds: float) -> "EEGMusicDataset":
+    """Return a new dataset with trials shorter than the threshold removed.
+
+    A trial is kept iff both:
+    - EEG duration in seconds >= min_trial_length_seconds
+    - Music duration in seconds >= min_trial_length_seconds
+    """
+    to_keep: List[int] = []
+    for i in range(len(self)):
+      trial = self[i]
+      raw = trial.eeg_data.get_eeg().raw_eeg
+      sfreq = float(raw.info["sfreq"]) if "sfreq" in raw.info else raw.info["sfreq"]
+      eeg_duration_sec = raw.n_times / sfreq
+      if (
+        eeg_duration_sec >= min_trial_length_seconds
+        and trial.music_data.get_music().length_seconds() >= min_trial_length_seconds
+      ):
+        to_keep.append(i)
+    filtered = EEGMusicDataset()
+    filtered.df = self.df.iloc[to_keep].reset_index(drop=True)
+    filtered.music_collection = self.music_collection
+    return filtered
