@@ -23,7 +23,7 @@ Q: how long do these last?
 
 ### optimizer
 
-AdamW optimizer? 
+AdamW optimizer?
 
 First learning rate finder: 
  - https://pytorch-lightning.readthedocs.io/en/1.5.10/advanced/lr_finder.html

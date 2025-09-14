@@ -12,6 +12,7 @@ from typing import (
   List,
   TypedDict,
   Tuple,
+  cast,
 )
 import numpy as np
 from numpy.typing import NDArray
@@ -19,10 +20,11 @@ from mne.io import BaseRaw
 import pandas as pd
 from scipy.io import wavfile
 import mne
-from pandas import Index
+from pandas import DataFrame, Index
 import json
 import shutil
 import torch.utils.data as torchdata
+from speechbrain.dataio.batch import PaddedBatch
 
 
 class MusicData(ABC):
@@ -370,7 +372,7 @@ def make_eeg_path(
   return base_dir / dataset / subject / session / run / trial_id / "eeg.edf"
 
 
-def copy_from_dataloader_into_dir(dataset_name: str, loader, base_dir: Path):
+def copy_from_dataloader_into_dir(loader, base_dir: Path):
   """
   Iterates over dataset loader trials and music collection,
   saving these into a specified directory.
@@ -379,7 +381,7 @@ def copy_from_dataloader_into_dir(dataset_name: str, loader, base_dir: Path):
   """
 
   base_dir.mkdir(parents=True, exist_ok=True)
-  stimuli_dataset_dir = base_dir / "stimuli" / dataset_name
+  stimuli_dataset_dir = base_dir / "stimuli" / loader.dataset_name
   eeg_dir = base_dir / "eeg"
   stimuli_dataset_dir.mkdir(parents=True, exist_ok=True)
   eeg_dir.mkdir(exist_ok=True)
@@ -396,10 +398,10 @@ def copy_from_dataloader_into_dir(dataset_name: str, loader, base_dir: Path):
     stimuli_file = stimuli_dataset_dir / music_ref.filename
     if not stimuli_file.exists():
       music_data.save(stimuli_file)
-      if dataset_name not in existing_metadata.stimuli:
-        existing_metadata.stimuli[dataset_name] = []
-      if music_ref.filename not in existing_metadata.stimuli[dataset_name]:
-        existing_metadata.stimuli[dataset_name].append(music_ref.filename)
+      if loader.dataset_name not in existing_metadata.stimuli:
+        existing_metadata.stimuli[loader.dataset_name] = []
+      if music_ref.filename not in existing_metadata.stimuli[loader.dataset_name]:
+        existing_metadata.stimuli[loader.dataset_name].append(music_ref.filename)
 
   # Save trials
   for trial in loader.trial_iterator():
@@ -475,8 +477,10 @@ class EEGMusicDataset(torchdata.Dataset):
   @df.setter
   def df(self, value: pd.DataFrame) -> None:
     """Set the dataframe with proper indexing."""
-    indexed = value.set_index(
-      ["dataset", "subject", "session", "run", "trial_id"],
+    cols = ["dataset", "subject", "session", "run", "trial_id"]
+    indexed = value.reindex(columns=cols + ["music_ref", "eeg_data"])
+    indexed = indexed.set_index(
+      cols,
       drop=False,
       verify_integrity=True,
     )
@@ -518,28 +522,35 @@ class EEGMusicDataset(torchdata.Dataset):
     return mapped_dataset
 
   def subject_wise_split(
-    self, p: float, seed: int = 42
-  ) -> Tuple["EEGMusicDataset", "EEGMusicDataset"]:
-    """Split into train/test by subjects.
+    self, p_train: float, p_val: float, seed: int = 42
+  ) -> Tuple["EEGMusicDataset", "EEGMusicDataset", "EEGMusicDataset"]:
+    """Split subjects into train/val/test using two proportions.
 
-    p: proportion of subjects in the training set
-    seed: RNG seed for reproducibility
+    p_train: fraction of subjects for train
+    p_val: fraction of subjects for val (after train); must satisfy p_train>0, p_val>=0, p_train+p_val<1
+    Remainder subjects form test. Deterministic via seed.
     """
+    if not (0 < p_train < 1):
+      raise ValueError("p_train in (0,1)")
+    if not (0 <= p_val < 1):
+      raise ValueError("p_val in [0,1)")
+    if p_train + p_val >= 1:
+      raise ValueError("p_train + p_val < 1 required")
     np.random.seed(seed)
-    subjects_array = np.array(self.df["subject"].unique())
-    np.random.shuffle(subjects_array)
-    n_train = int(len(subjects_array) * p)
-    train_subj, test_subj = subjects_array[:n_train], subjects_array[n_train:]
+    subj = np.array(self.df["subject"].unique())
+    np.random.shuffle(subj)
+    n = len(subj)
+    n_tr = int(n * p_train)
+    n_va = int(n * p_val)
 
-    def mk(df) -> "EEGMusicDataset":
+    def mk(s: np.ndarray) -> "EEGMusicDataset":
       ds = EEGMusicDataset()
-      ds.df = df.reset_index(drop=True)
+      df = self.df[self.df["subject"].isin(s.tolist())]
+      ds.df = cast(DataFrame, df.reset_index(drop=True))
       ds.music_collection = self.music_collection
       return ds
 
-    train_df = self.df[self.df["subject"].isin(train_subj.tolist())]
-    test_df = self.df[self.df["subject"].isin(test_subj.tolist())]
-    return mk(train_df), mk(test_df)
+    return mk(subj[:n_tr]), mk(subj[n_tr : n_tr + n_va]), mk(subj[n_tr + n_va :])
 
   def save(self, base_dir: Path) -> None:
     """Save dataset to directory with metadata and trial data."""
@@ -666,3 +677,57 @@ class EEGMusicDataset(torchdata.Dataset):
     filtered.df = self.df.iloc[to_keep].reset_index(drop=True)
     filtered.music_collection = self.music_collection
     return filtered
+
+
+def example_collate_fn(trials: List[TrialData[EegData, MusicData]]):
+  # todo: preload before collate_fn? matters with pin_memory and all that?
+  eegs = [t.eeg_data.get_eeg() for t in trials]
+  music = [t.music_data.get_music() for t in trials]
+  return PaddedBatch(eegs), PaddedBatch(music)
+
+
+def prepare_trial(trial: TrialData[EegData, MusicData]):
+  """Set common length between music and eeg, resample eeg to 256Hz."""
+
+  eeg: BaseRaw = trial.eeg_data.get_eeg().raw_eeg
+  m_len = trial.music_data.get_music().length_seconds()
+  e_len = eeg.n_times / eeg.info["sfreq"]
+  min_len = min(m_len, e_len)
+
+  music = trial.music_data.get_music()
+  music = WavRAW(
+    music.raw_data[: int(min_len * music.sample_rate)], sample_rate=music.sample_rate
+  )
+
+  eeg: BaseRaw = cast(BaseRaw, eeg.copy().resample(256))
+  eeg = eeg.crop(
+    tmax=(min(min_len, eeg.times[-1]))
+  )  # when l=e_len then eeg_times[-1] is that 1s/sample_rate early to l which errors
+
+  return TrialData(
+    dataset=trial.dataset,
+    subject=trial.subject,
+    session=trial.session,
+    run=trial.run,
+    trial_id=trial.trial_id,
+    eeg_data=RawEeg(raw_eeg=eeg),
+    music_data=music,
+  )
+
+
+class MappedDataset(EEGMusicDataset):
+  """Dataset with a mapping function applied to each trial on access."""
+
+  def __init__(
+    self,
+    base_dataset: EEGMusicDataset,
+    map_fn: Callable[[TrialData[EegData, MusicData]], TrialData[E, M]],
+  ):
+    super().__init__()
+    self.df = base_dataset.df
+    self.music_collection = base_dataset.music_collection
+    self.map_fn = map_fn  # type: ignore[assignment]
+
+  def __getitem__(self, idx: int) -> TrialData[EegData, MusicData]:
+    trial = super().__getitem__(idx)
+    return cast(TrialData[EegData, MusicData], self.map_fn(trial))

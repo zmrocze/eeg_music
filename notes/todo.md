@@ -8,3 +8,4 @@
 
  - [ ] fix hardcoded dataset paths in tests
  - [ ] fix the tests after data.py interface changes. the tests use not the functionality from data as designed but write and test their own helpers. leave in background with smart warp.
+ - [ ] actually just use fif. use both

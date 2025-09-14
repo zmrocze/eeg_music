@@ -5,6 +5,7 @@ description = "Minimal project setup"
 
 requires-python = "==3.12.11"
 dependencies = [
+  "pip",
   "openneuro-py",
   "scipy",
   "mne",
@@ -20,7 +21,9 @@ dependencies = [
   "ipython",
   "jupyter",
   "notebook",
-  "pip"
+  "torch",
+  "torcheeg",
+  "speechbrain",
 ]
 
 [project.optional-dependencies]

@@ -122,15 +122,10 @@ class BaseBCMILoader(ABC, Generic[E]):
       >>> loader = create_bcmi_loader('/path/to/bcmi-calibration')
   """
 
-  def __init__(self, root_path: str):
-    """
-    Initialize the BCMI loader.
-
-    Args:
-        root_path: Path to the BCMI dataset root directory
-    """
+  def __init__(self, root_path: str, dataset_name: str):
+    """Initialize the BCMI loader with explicit dataset_name."""
     self.root_path = Path(root_path)
-    self.dataset_name = self.root_path.name
+    self.dataset_name = dataset_name
     self.subjects = self._get_available_subjects()
     self.data = {}
 
@@ -417,7 +412,7 @@ class BaseBCMILoader(ABC, Generic[E]):
     max_subjects: Optional[int] = None,
     max_runs_per_session: Optional[int] = None,
     max_sessions_per_subject: Optional[int] = None,
-    verbose: bool = True,
+    verbose: bool = False,
   ) -> Dict[str, Any]:
     """
     Load data for all available subjects.
@@ -704,6 +699,9 @@ class BCMICalibrationLoader(BaseBCMILoader[RawEeg]):
       Brain-Computer Interfaces.
   """
 
+  def __init__(self, root_path: str, dataset_name: str = "bcmi-calibration"):
+    super().__init__(root_path, dataset_name)
+
   def trial_iterator(self) -> Iterator[TrialRow[RawEeg]]:
     """
     Iterate over EEG trial snippets for calibration data.
@@ -858,6 +856,9 @@ class BCMITrainingLoader(BaseBCMILoader[RawEeg]):
       >>> print(f"Training contrasts: {set(all_contrasts)}")
   """
 
+  def __init__(self, root_path: str, dataset_name: str = "bcmi-training"):
+    super().__init__(root_path, dataset_name)
+
   def trial_iterator(self) -> Iterator[TrialRow[RawEeg]]:
     trial_duration_secs = 20  # always
     for subject, session, run, r in self.loader_data_iter():
@@ -1009,6 +1010,9 @@ class BCMITestingLoader(BaseBCMILoader[EegData]):
   - Attempt to change affection phase
   """
 
+  def __init__(self, root_path: str, dataset_name: str = "bcmi-testing"):
+    super().__init__(root_path, dataset_name)
+
   def trial_iterator(self) -> Iterator[TrialRow[EegData]]:
     """
     Iterate over EEG trial snippets for testing data.
@@ -1099,6 +1103,9 @@ class BCMITempoLoader(BaseBCMILoader[EegData]):
   music tempo through imagined movement.
   """
 
+  def __init__(self, root_path: str, dataset_name: str = "bcmi-tempo"):
+    super().__init__(root_path, dataset_name)
+
   def trial_iterator(self) -> Iterator[TrialRow[EegData]]:
     """
     Iterate over EEG trial snippets for tempo control data.
@@ -1172,6 +1179,9 @@ class BCMIScoresLoader(BaseBCMILoader[EegData]):
 
   Experimental paradigm: Listening to movie scores for emotion induction.
   """
+
+  def __init__(self, root_path: str, dataset_name: str = "bcmi-scores"):
+    super().__init__(root_path, dataset_name)
 
   def trial_iterator(self) -> Iterator[TrialRow[EegData]]:
     """
@@ -1251,6 +1261,9 @@ class BCMIFMRILoader(BaseBCMILoader[EegData]):
   - Tasks: classicalMusic, genMusic01, genMusic02, genMusic03, washout
   - Subject format: sub-01, sub-02, etc. (not sub-001)
   """
+
+  def __init__(self, root_path: str, dataset_name: str = "bcmi-fmri"):
+    super().__init__(root_path, dataset_name)
 
   def trial_iterator(self) -> Iterator[TrialRow[EegData]]:
     """
@@ -1388,11 +1401,11 @@ def create_bcmi_loader(dataset_path: str) -> BaseBCMILoader:
   }
 
   if dataset_name in loader_map:
-    return loader_map[dataset_name](dataset_path)
+    return loader_map[dataset_name](dataset_path, dataset_name)
   else:
     # Fallback to base calibration loader
     print(f"Warning: Unknown dataset '{dataset_name}', using calibration loader")
-    return BCMICalibrationLoader(dataset_path)
+    return BCMICalibrationLoader(dataset_path, "bcmi-calibration")
 
 
 def load_all_bcmi_datasets(
