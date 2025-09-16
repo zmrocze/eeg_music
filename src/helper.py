@@ -2,7 +2,7 @@ import numpy as np
 import librosa
 import librosa.display as lbd
 import matplotlib.pyplot as plt
-from data import WavRAW
+from data import WavRAW, MelRaw
 
 
 def onset_secs_to_samples(onset_secs, sfreq):
@@ -12,15 +12,15 @@ def onset_secs_to_samples(onset_secs, sfreq):
 def wavraw_to_melspectrogram(
   wav: WavRAW,
   n_mels: int = 128,
-  n_fft: int | None = None,
-  hop_length: int | None = None,
+  n_fft: int = 2048,
+  hop_length: int = 512,
   fmin: float = 0.0,
   fmax: float | None = None,
   center: bool = True,
   power: float = 2.0,
   to_db: bool = True,
-) -> np.ndarray:
-  """Return (log) mel-spectrogram for a WavRAW.
+) -> MelRaw:
+  """Return MelRaw (mel-spectrogram + sr + hop_length) for a WavRAW.
 
   Defaults: 128 mels, n_fft=2048, hop=512, power spectrogram, dB-scaled.
   """
@@ -31,8 +31,8 @@ def wavraw_to_melspectrogram(
   S = librosa.feature.melspectrogram(
     y=y,
     sr=wav.sample_rate,
-    n_fft=2048 if n_fft is None else n_fft,
-    hop_length=512 if hop_length is None else hop_length,
+    n_fft=n_fft,
+    hop_length=hop_length,
     n_mels=n_mels,
     fmin=fmin,
     fmax=fmax,
@@ -41,7 +41,8 @@ def wavraw_to_melspectrogram(
     norm="slaney",
     htk=False,
   )
-  return librosa.power_to_db(S, ref=np.max) if to_db else S
+  if to_db: S = librosa.power_to_db(S, ref=np.max)
+  return MelRaw(mel=S, sample_rate=wav.sample_rate, hop_length=hop_length)
 
 
 def melspectrogram_figure(
@@ -78,10 +79,15 @@ def plot_melspectrogram(
   **kwargs,
 ):
   """Plot the mel-spectrogram and show it. Returns the created Figure."""
+  mel = wavraw_to_melspectrogram(wav, **kwargs)
   fig = melspectrogram_figure(
-    wavraw_to_melspectrogram(wav, **kwargs),
-    sample_rate=wav.sample_rate,
-    **kwargs,
+    mel.mel,
+    sample_rate=mel.sample_rate,
+    fmin=kwargs.get('fmin', 0.0),
+    fmax=kwargs.get('fmax'),
+    to_db=kwargs.get('to_db', True),
+    cmap=kwargs.get('cmap', 'magma'),
+    title=kwargs.get('title', 'Mel-spectrogram'),
   )
   plt.show()
   return fig
