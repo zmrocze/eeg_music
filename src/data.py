@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import (
   Dict,
@@ -13,8 +14,7 @@ from typing import (
   List,
   TypedDict,
   Tuple,
-  cast,
-  Literal,  # added
+  cast,  # added
 )
 from helper import wavraw_to_melspectrogram
 import numpy as np
@@ -29,6 +29,7 @@ import shutil
 import torch
 import torch.utils.data as torchdata
 from speechbrain.dataio.batch import PaddedBatch
+
 
 class MusicData(ABC):
   """Abstract base class for music data."""
@@ -220,8 +221,8 @@ class WavRAW(MusicData):
   def length_seconds(self) -> float:
     """Get the length of the WAV data in seconds."""
     return self.raw_data.shape[0] / self.sample_rate
-  
-  def length_samples(self) -> float:
+
+  def length_samples(self) -> int:
     """Get the length of the WAV data."""
     return self.raw_data.shape[0]
 
@@ -231,23 +232,37 @@ class WavRAW(MusicData):
 
   def save(self, filepath: Path) -> None:
     """Save the WAV data to a file."""
-    wavfile.write(filepath if filepath.suffix else filepath.with_suffix('.wav'), self.sample_rate, self.raw_data)
+    wavfile.write(
+      filepath if filepath.suffix else filepath.with_suffix(".wav"),
+      self.sample_rate,
+      self.raw_data,
+    )
+
 
 @dataclass
 class MelRaw(MusicData):
   mel: NDArray[np.floating]  # (n_mels, n_frames)
-  sample_rate: int           # original audio sample rate
-  hop_length: int            # hop used to create mel
-  def length_seconds(self) -> float: return self.mel.shape[1] * self.hop_length / self.sample_rate
+  sample_rate: int  # original audio sample rate
+  hop_length: int  # hop used to create mel
+
+  def length_seconds(self) -> float:
+    return self.mel.shape[1] * self.hop_length / self.sample_rate
+
   def save(self, filepath: Path):
-    tgt = filepath if filepath.suffix else filepath.with_suffix('.npz')
-    np.savez_compressed(tgt, mel=self.mel, sample_rate=self.sample_rate, hop_length=self.hop_length)
-  def get_music(self) -> "MelRaw": return self
+    tgt = filepath if filepath.suffix else filepath.with_suffix(".npz")
+    np.savez_compressed(
+      tgt, mel=self.mel, sample_rate=self.sample_rate, hop_length=self.hop_length
+    )
+
+  def get_music(self) -> "MelRaw":
+    return self
+
 
 # MelOrWav = MelRaw | WavRAW  # type alias for external use
 
 # helper functions (optional convenience)
 # def mel_or_wav_length(x: MelOrWav) -> float: return x.length_seconds()
+
 
 @dataclass
 class OnDiskMusic(MusicData):
@@ -264,19 +279,26 @@ class OnDiskMusic(MusicData):
     """Save the music data by copying the file."""
     shutil.copy2(self.filepath, filepath)
 
+
 @dataclass
 class OnDiskMel(MusicData):
   """Music mel data backed by a .npz file on disk.
 
   Expected archive keys: mel, sample_rate, hop_length.
   """
+
   filepath: Path
+
   def get_music(self) -> MelRaw:
     d = np.load(self.filepath)
-    return MelRaw(mel=d['mel'], sample_rate=int(d['sample_rate']), hop_length=int(d['hop_length']))
+    return MelRaw(
+      mel=d["mel"], sample_rate=int(d["sample_rate"]), hop_length=int(d["hop_length"])
+    )
+
   def save(self, filepath: Path) -> None:
-    tgt = filepath if filepath.suffix else filepath.with_suffix('.npz')
+    tgt = filepath if filepath.suffix else filepath.with_suffix(".npz")
     shutil.copy2(self.filepath, tgt)
+
 
 @dataclass
 class RawEeg(EegData):
@@ -314,31 +336,6 @@ M = TypeVar("M", bound=MusicData)
 E = TypeVar("E", bound=EegData)
 
 
-@dataclass
-class TrialData(Generic[E, M]):
-  """Data class containing music and EEG data."""
-
-  dataset: str
-  subject: str
-  session: str
-  run: str
-  trial_id: str
-
-  eeg_data: E
-  music_data: M
-
-  def load_to_mem(self) -> "TrialData[RawEeg, WavRAW | MelRaw]":
-    """Load any on-disk data into memory, returning a new TrialData instance."""
-    return TrialData(
-      dataset=self.dataset,
-      subject=self.subject,
-      session=self.session,
-      run=self.run,
-      trial_id=self.trial_id,
-      eeg_data=self.eeg_data.get_eeg(),
-      music_data=self.music_data.get_music(),
-    )
-
 @dataclass(frozen=True)
 class MusicFilename:
   """Reference to music data in the music collection."""
@@ -351,6 +348,34 @@ class MusicFilename:
     return cls(filename=music_id.to_filename())
 
 
+@dataclass
+class TrialData(Generic[E, M]):
+  """Data class containing music and EEG data."""
+
+  dataset: str
+  subject: str
+  session: str
+  run: str
+  trial_id: str
+  music_filename: MusicFilename
+
+  eeg_data: E
+  music_data: M
+
+  def load_to_mem(self) -> "TrialData[RawEeg, WavRAW | MelRaw]":
+    """Load any on-disk data into memory, returning a new TrialData instance."""
+    return TrialData(
+      dataset=self.dataset,
+      subject=self.subject,
+      session=self.session,
+      run=self.run,
+      trial_id=self.trial_id,
+      music_filename=self.music_filename,
+      eeg_data=self.eeg_data.get_eeg(),
+      music_data=self.music_data.get_music(),
+    )
+
+
 class TrialMetadataRecord(TypedDict):
   """Typed dict for trial metadata record in JSON."""
 
@@ -359,7 +384,7 @@ class TrialMetadataRecord(TypedDict):
   session: str
   run: str
   trial_id: str
-  music_ref: str
+  music_filename: str
 
 
 @dataclass
@@ -408,7 +433,7 @@ class TrialRow(Generic[E]):
   run: str
   trial_id: str
   eeg_data: E
-  music_ref: MusicFilename
+  music_filename: MusicFilename
 
 
 def make_eeg_path(
@@ -457,7 +482,7 @@ def copy_from_dataloader_into_dir(loader, base_dir: Path):
       "session": trial.session,
       "run": trial.run,
       "trial_id": trial.trial_id,
-      "music_ref": trial.music_ref.filename,
+      "music_filename": trial.music_ref.filename,
     }
 
     eeg_path = make_eeg_path(
@@ -509,7 +534,15 @@ class EEGMusicDataset(torchdata.Dataset):
     """
     self.df = pd.DataFrame(
       columns=Index(
-        ["dataset", "subject", "session", "run", "trial_id", "music_ref", "eeg_data"]
+        [
+          "dataset",
+          "subject",
+          "session",
+          "run",
+          "trial_id",
+          "music_filename",
+          "eeg_data",
+        ]
       )
     )
 
@@ -524,7 +557,7 @@ class EEGMusicDataset(torchdata.Dataset):
   def df(self, value: pd.DataFrame) -> None:
     """Set the dataframe with proper indexing."""
     cols = ["dataset", "subject", "session", "run", "trial_id"]
-    indexed = value.reindex(columns=cols + ["music_ref", "eeg_data"])
+    indexed = value.reindex(columns=cols + ["music_filename", "eeg_data"])
     indexed = indexed.set_index(
       cols,
       drop=False,
@@ -537,7 +570,7 @@ class EEGMusicDataset(torchdata.Dataset):
 
   def __getitem__(self, idx: int) -> TrialData[EegData, MusicData]:
     row = self.df.iloc[idx]
-    music_ref = MusicRef(filename=row.music_ref, dataset=row.dataset)
+    music_ref = MusicRef(filename=row.music_filename, dataset=row.dataset)
     music_data = self.music_collection[music_ref]
     return TrialData(
       dataset=row.dataset,
@@ -545,6 +578,7 @@ class EEGMusicDataset(torchdata.Dataset):
       session=row.session,
       run=row.run,
       trial_id=row.trial_id,
+      music_filename=row.music_filename,
       eeg_data=row.eeg_data,
       music_data=music_data,
     )
@@ -599,32 +633,43 @@ class EEGMusicDataset(torchdata.Dataset):
     return mk(subj[:n_tr]), mk(subj[n_tr : n_tr + n_va]), mk(subj[n_tr + n_va :])
 
   def save(self, base_dir: Path) -> None:
-    """Save dataset to directory with metadata and trial data."""
+    """
+    Save dataset to directory with metadata and trial data.
+
+    Filters out unused music from music_collection.
+    Relies on data from __getitem__!
+    """
     base_dir.mkdir(parents=True, exist_ok=True)
     metadata_path = base_dir / "metadata.json"
 
     if metadata_path.exists():
       print(f"Overwriting existing metadata at {metadata_path}")
 
-    # Create stimuli directories and save music
+    # filtered and with potential mapping (in __getitem__) applied, see MappedDataset
+    new_music_collection = {}
+
+    # Save EEG data
+    eeg_dir = base_dir / "eeg"
+    for trial in self:
+      eeg_path = make_eeg_path(
+        eeg_dir, trial.dataset, trial.subject, trial.session, trial.run, trial.trial_id
+      )
+      eeg_path.parent.mkdir(parents=True, exist_ok=True)
+      trial.eeg_data.save(eeg_path)
+
+      new_music_collection[
+        MusicRef(filename=trial.music_filename, dataset=trial.dataset)
+      ] = trial.music_data
+
     stimuli_dir = base_dir / "stimuli"
-    for music_ref, music_data in self.music_collection.items():
+    for music_ref, music_data in new_music_collection.items():
       music_dir = stimuli_dir / music_ref.dataset
       music_dir.mkdir(parents=True, exist_ok=True)
       music_data.save(music_dir / music_ref.filename.filename)
 
-    # Save EEG data
-    eeg_dir = base_dir / "eeg"
-    for _, row in self.df.iterrows():
-      eeg_path = make_eeg_path(
-        eeg_dir, row.dataset, row.subject, row.session, row.run, row.trial_id
-      )
-      eeg_path.parent.mkdir(parents=True, exist_ok=True)
-      row.eeg_data.save(eeg_path)
-
     # Save metadata
     stimuli_by_dataset = {}
-    for music_ref in self.music_collection.keys():
+    for music_ref in new_music_collection.keys():
       if music_ref.dataset not in stimuli_by_dataset:
         stimuli_by_dataset[music_ref.dataset] = []
       stimuli_by_dataset[music_ref.dataset].append(music_ref.filename.filename)
@@ -637,9 +682,10 @@ class EEGMusicDataset(torchdata.Dataset):
           "session": row.session,
           "run": row.run,
           "trial_id": row.trial_id,
-          "music_ref": row.music_ref.filename,
+          "music_filename": row.music_ref.filename,
         }
         for _, row in self.df.iterrows()
+        # ^ assuming MappedDataset's map over __getitem__ doesn't change trial metadata, only data
       ],
       stimuli=stimuli_by_dataset,
       num_trials=len(self.df),
@@ -683,7 +729,7 @@ class EEGMusicDataset(torchdata.Dataset):
           "session": trial_record["session"],
           "run": trial_record["run"],
           "trial_id": trial_record["trial_id"],
-          "music_ref": MusicFilename(filename=trial_record["music_ref"]),
+          "music_filename": MusicFilename(filename=trial_record["music_filename"]),
           "eeg_data": OnDiskEeg(filepath=eeg_path),
         }
       )
@@ -731,6 +777,7 @@ def example_collate_fn(trials: List[TrialData[EegData, MusicData]]):
   music = [t.music_data.get_music() for t in trials]
   return PaddedBatch(eegs), PaddedBatch(music)
 
+
 @dataclass(frozen=True)
 class MelParams:
   n_mels: int = 128
@@ -741,15 +788,26 @@ class MelParams:
   center: bool = True
   power: float = 2.0
   to_db: bool = True
+
   def as_kwargs(self) -> dict:
-    return {"n_mels": self.n_mels, "n_fft": self.n_fft, "hop_length": self.hop_length, "fmin": self.fmin, "center": self.center, "power": self.power, "to_db": self.to_db, "fmax": self.fmax}
+    return {
+      "n_mels": self.n_mels,
+      "n_fft": self.n_fft,
+      "hop_length": self.hop_length,
+      "fmin": self.fmin,
+      "center": self.center,
+      "power": self.power,
+      "to_db": self.to_db,
+      "fmax": self.fmax,
+    }
+
 
 def prepare_trial(
   trial: TrialData[EegData, MusicData],
-  eeg_resample : Optional[int] = 256,
+  eeg_resample: Optional[int] = 256,
   eeg_l_freq: Optional[float] = None,
   eeg_h_freq: Optional[float] = None,
-  apply_mel : Optional[MelParams] = None,
+  apply_mel: Optional[MelParams] = None,
 ) -> TrialData[RawEeg, WavRAW | MelRaw]:
   """Set common length between music and eeg, resample eeg and filter eeg, transform music to mel spectrogram.
 
@@ -769,18 +827,19 @@ def prepare_trial(
       music_cropped: MusicData = WavRAW(raw[:max_samples], sr)
       # (optional) apply mel transform could go here if apply_mel is not None
       if apply_mel is not None:
-        music_cropped = wavraw_to_melspectrogram(
-          music_cropped,
-          **apply_mel.as_kwargs()
-        )
+        music_cropped = wavraw_to_melspectrogram(music_cropped, **apply_mel.as_kwargs())
     case MelRaw(mel=mel, sample_rate=sr, hop_length=hop):
-      assert apply_mel is not None, "Can't apply_mel if the input is already a mel spectrogram"
+      assert apply_mel is not None, (
+        "Can't apply_mel if the input is already a mel spectrogram"
+      )
       max_frames = int(min_len * sr / hop)
       music_cropped = MelRaw(mel[:, :max_frames], sr, hop)
 
   if eeg_l_freq is not None or eeg_h_freq is not None:
     eeg: BaseRaw = cast(BaseRaw, eeg.filter(l_freq=eeg_l_freq, h_freq=eeg_h_freq))
-  eeg: BaseRaw = cast(BaseRaw, eeg.copy() if eeg_resample is None else eeg.copy().resample(eeg_resample))
+  eeg: BaseRaw = cast(
+    BaseRaw, eeg.copy() if eeg_resample is None else eeg.copy().resample(eeg_resample)
+  )
   eeg = eeg.crop(
     tmax=(min(min_len, eeg.times[-1]))
   )  # when l=e_len then eeg_times[-1] is that 1s/sample_rate early to l which errors
@@ -791,11 +850,13 @@ def prepare_trial(
     session=trial.session,
     run=trial.run,
     trial_id=trial.trial_id,
+    music_filename=trial.music_filename,
     eeg_data=RawEeg(raw_eeg=eeg),
     music_data=music_cropped,
   )
 
-class MappedDataset(torch.utils.data.Dataset):
+
+class MappedDataset(EEGMusicDataset):
   """Dataset with a mapping function applied to each trial on access."""
 
   def __init__(
@@ -813,38 +874,104 @@ class MappedDataset(torch.utils.data.Dataset):
     trial = super().__getitem__(idx)
     return cast(TrialData[EegData, MusicData], self.map_fn(trial))
 
+
+def int_or_err(x: Fraction) -> int:
+  if x.denominator != 1:
+    raise ValueError(f"Value {x} is not integer")
+  return x.numerator
+
+
 class StratifiedSamplingDataset(torch.utils.data.Dataset):
   """
-    Wrapper over ds, basically ds x n_strata.
-    Indexing returns (trials, stratum_index).
-    
-    Useful for stratified sampling in DataLoader.
+  Wrapper over ds, basically ds x n_strata.
+  Indexing returns (trials, stratum_index).
+
+  Useful for stratified sampling in DataLoader.
   """
 
   def __init__(
     self,
     base_dataset: EEGMusicDataset,
-    n_strata: int
+    n_strata: int,
+    trial_length_secs: Fraction,
   ):
+    """n_strata should be picked so that"""
     super().__init__()
     self.df = base_dataset.df
     self.music_collection = base_dataset.music_collection
     self.n_strata = n_strata  # type: ignore[assignment]
+    self.trial_length_secs: Fraction = trial_length_secs
 
   def __len__(self) -> int:
     return len(self.df) * self.n_strata
 
-  def __getitem__(self, idx: int) -> Tuple[TrialData[EegData, MusicData], int]:
-    stratum_index = idx % self.n_strata
+  def __getitem__(self, idx: int) -> Tuple[TrialData[RawEeg, WavRAW | MelRaw]]:
+    """
+    Here we return a portion of a trial, starting at a random index, within a stratum (for balancing).
+    """
     trial_index = idx // self.n_strata
     trial = super().__getitem__(trial_index)
-    return (trial, stratum_index)
+    stratum_index = idx % self.n_strata
 
-def pick_sample_stratified(
-  strat_trial: Tuple[TrialData[EegData, MusicData], int]
-) -> TrialData[EegData, MusicData]:
-  """Pick a sample from a stratified trial."""
-  trial, stratum_index = strat_trial
-  len_ = trial.music_data.get_music().length_seconds()
-  raise NotImplementedError("Stratified sampling not implemented")
-  return trial
+    music_obj = trial.music_data.get_music()
+    m_len: float = music_obj.length_seconds()
+    eeg_raw = trial.eeg_data.get_eeg().raw_eeg
+    e_len: float = eeg_raw.length_seconds()
+    length = min(m_len, e_len)
+
+    n_starts = int((length - self.trial_length_secs) * eeg_raw.info["sfreq"])
+    new_length_samples: int = int_or_err(
+      self.trial_length_secs * Fraction(eeg_raw.info["sfreq"])
+    )
+    n_starts_exact = int(eeg_raw.n_times) - new_length_samples + 1
+    s_start = (n_starts * stratum_index) // self.n_strata
+    s_end = (n_starts * (stratum_index + 1)) // self.n_strata  # exclusive
+    random_start = np.random.randint(s_start, min(s_end, n_starts_exact))
+    data, _times = eeg_raw[:, random_start : random_start + new_length_samples]
+    eeg_raw = mne.io.RawArray(
+      data=data, info=eeg_raw.info, first_samp=eeg_raw.first_samp + random_start
+    )
+
+    # some notes, maybe irrelevant now:
+    # Note: doesnt work for 44100 / 256 !!!
+    # Note: would be good to assume that:
+    #  either sample_rate is divisible by eeg_raw.info["sfreq"]
+    #  or the other way round (i.e. for mel)
+    #  (which can be forced by resampling music, which likely is sensible anyway)
+    # Q: do we strictly need this?
+    # the max misalignment is going to be sth like: 1/sample_rate + 1/eeg_raw.info["sfreq"]
+    #  which is not more than few milliseconds
+
+    match music_obj:
+      case WavRAW(raw_data, sample_rate):
+        new_length_samples: int = int_or_err(self.trial_length_secs * sample_rate)
+        tot_m = music_obj.length_samples()
+
+        random_start_music = round((tot_m * random_start) / n_starts_exact)
+        random_start_music = min(random_start_music, tot_m - new_length_samples + 1)
+        return_music = WavRAW(
+          raw_data=raw_data[
+            random_start_music : random_start_music + new_length_samples
+          ],
+          sample_rate=sample_rate,
+        )
+
+      case MelRaw(mel, sample_rate, hop_length):
+        new_length_samples: int = int_or_err(
+          self.trial_length_secs * sample_rate / hop_length
+        )
+        tot_m = music_obj.mel.shape[-1]
+        random_start_music = round((tot_m * random_start) / n_starts_exact)
+        random_start_music = min(random_start_music, tot_m - new_length_samples + 1)
+
+        return_music = MelRaw(
+          mel=mel[:, random_start_music : random_start_music + new_length_samples],
+          sample_rate=sample_rate,
+          hop_length=hop_length,
+        )
+      case _:
+        raise ValueError("Unknown music type")
+
+    trial.music_data = return_music
+    trial.eeg_data = RawEeg(raw_eeg=eeg_raw)
+    return trial
