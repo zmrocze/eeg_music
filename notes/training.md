@@ -47,6 +47,10 @@ can use collate_fn to i.e. set to fixed tensor size (but maybe better in preproc
 
 Bucketized Batch Sampling ??
 
+eegpt works with 4s trials.
+Want random trial start time. 
+Very simple to draw random segment from our ~20s trials, BUT can we do more balanced?
+
 ### wb
 
 https://docs.wandb.ai/guides/runs/alert/
@@ -58,3 +62,12 @@ https://www.perplexity.ai/search/brief-story-of-reagan-presiden-eiFslgL7R.maMgyH
 https://pypi.org/project/Audio-Similarity/
 
 https://lightning.ai/docs/torchmetrics/stable/audio/perceptual_evaluation_speech_quality.html
+
+
+## model
+
+first eegpt
+large 25m param checkpoint
+our 10-20 electrodes are a subset of 10-10 for eegpt,
+therefore can either use the recommended adaptive spatial filter
+or apply a mask
