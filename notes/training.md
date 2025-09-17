@@ -71,3 +71,6 @@ large 25m param checkpoint
 our 10-20 electrodes are a subset of 10-10 for eegpt,
 therefore can either use the recommended adaptive spatial filter
 or apply a mask
+
+let's generate 8 mel patches per one transformer output patch (64 per second, 128x256 spectrogram output)
+64 patches /s = 44100 / 64 samples /s = d

@@ -25,7 +25,6 @@ import mne
 from pandas import DataFrame, Index
 import json
 import shutil
-import torch
 import torch.utils.data as torchdata
 from speechbrain.dataio.batch import PaddedBatch
 import librosa
@@ -240,12 +239,22 @@ class WavRAW(MusicData):
       self.raw_data,
     )
 
+  def resampled(self, new_sr: int) -> "WavRAW":
+    """Return a new WavRAW instance with the audio resampled to new_sr."""
+    resampled_data = librosa.resample(
+      self.raw_data, orig_sr=self.sample_rate, target_sr=new_sr, res_type="kaiser_best"
+    )
+    return WavRAW(raw_data=resampled_data, sample_rate=new_sr)
+
 
 @dataclass
 class MelRaw(MusicData):
   mel: NDArray[np.floating]  # (n_mels, n_frames)
   sample_rate: int  # original audio sample rate
   hop_length: int  # hop used to create mel
+  fmin: float
+  fmax: Optional[float]
+  to_db: bool
 
   def length_seconds(self) -> float:
     return self.mel.shape[1] * self.hop_length / self.sample_rate
@@ -253,7 +262,14 @@ class MelRaw(MusicData):
   def save(self, filepath: Path):
     tgt = filepath if filepath.suffix else filepath.with_suffix(".npz")
     np.savez_compressed(
-      tgt, mel=self.mel, sample_rate=self.sample_rate, hop_length=self.hop_length
+      tgt,
+      mel=self.mel,
+      sample_rate=self.sample_rate,
+      hop_length=self.hop_length,
+      fmin=self.fmin,
+      to_db=self.to_db,
+      allow_pickle=True,
+      **({"fmax": self.fmax} if self.fmax is not None else {}),
     )
 
   def get_music(self) -> "MelRaw":
@@ -275,7 +291,9 @@ class OnDiskMusic(MusicData):
   def get_music(self) -> WavRAW:
     """Load and return the music as WavRAW data."""
     sample_rate, raw_data = wavfile.read(self.filepath)
-    return WavRAW(raw_data=raw_data.astype(np.floating), sample_rate=sample_rate)
+    scale = 32768.0 if raw_data.dtype == np.int16 else 2147483648.0
+    raw_data = raw_data.astype(np.float32) / scale
+    return WavRAW(raw_data=raw_data, sample_rate=sample_rate)
 
   def save(self, filepath: Path) -> None:
     """Save the music data by copying the file."""
@@ -293,8 +311,14 @@ class OnDiskMel(MusicData):
 
   def get_music(self) -> MelRaw:
     d = np.load(self.filepath)
+    fmax = float(d["fmax"]) if "fmax" in d else None
     return MelRaw(
-      mel=d["mel"], sample_rate=int(d["sample_rate"]), hop_length=int(d["hop_length"])
+      mel=d["mel"],
+      sample_rate=int(d["sample_rate"]),
+      hop_length=int(d["hop_length"]),
+      fmin=float(d["fmin"]),
+      fmax=fmax,
+      to_db=bool(d["to_db"]),
     )
 
   def save(self, filepath: Path) -> None:
@@ -310,7 +334,13 @@ class RawEeg(EegData):
 
   def get_eeg(self) -> "RawEeg":
     """Get the EEG data."""
+    self.raw_eeg.load_data()
     return self
+
+  def length_seconds(self) -> float:
+    """Get the length of the EEG data in seconds."""
+    sfreq = float(self.raw_eeg.info["sfreq"])
+    return self.raw_eeg.n_times / sfreq
 
   def save(self, filepath: Path) -> None:
     """Save the EEG data to a file."""
@@ -326,7 +356,10 @@ class OnDiskEeg(EegData):
 
   def get_eeg(self) -> "RawEeg":
     """Load and return the EEG data as RawEeg."""
-    return RawEeg(raw_eeg=mne.io.read_raw(self.filepath, preload=False))
+    # Note: we could go on with preload=False here, but then we'd need another
+    # differentiating type for RawEEG but actually certainly loaded.
+    # Turns out methods like filter don't load when needed but error out.
+    return RawEeg(raw_eeg=mne.io.read_raw(self.filepath, preload=True))
 
   def save(self, filepath: Path) -> None:
     """Save the EEG data by copying the file."""
@@ -376,6 +409,38 @@ class TrialData(Generic[E, M]):
       eeg_data=self.eeg_data.get_eeg(),
       music_data=self.music_data.get_music(),
     )
+
+  def _music_brief(self) -> str:
+    m = self.music_data
+    match m:
+      case WavRAW(raw_data=raw, sample_rate=sr):
+        return f"WavRAW(sr={sr}, secs={len(raw) / sr:.3f}, samples={raw.shape[0]})"
+      case MelRaw(mel=mel, sample_rate=sr, hop_length=hop, fmin=_, fmax=_, to_db=_):
+        return f"MelRaw(sr={sr}, hop={hop}, mel_shape={mel.shape}, secs={mel.shape[1] * hop / sr:.3f})"
+      case _:
+        return type(m).__name__
+
+  def _eeg_brief(self) -> str:
+    e = self.eeg_data
+    if isinstance(e, RawEeg):
+      sf = float(e.raw_eeg.info["sfreq"])
+      return f"RawEeg(sfreq={int(sf)}, chans={len(e.raw_eeg.ch_names)}, secs={e.raw_eeg.n_times / sf:.3f}, samples={e.raw_eeg.n_times})"
+    if isinstance(e, OnDiskEeg):
+      return f"OnDiskEeg(path='{e.filepath.name}')"
+    return type(e).__name__
+
+  def pretty(self) -> str:
+    return (
+      f"TrialData(\n"
+      f"  dataset={self.dataset}, subject={self.subject}, session={self.session}, run={self.run}, trial_id={self.trial_id},\n"
+      f"  music_filename={self.music_filename.filename},\n"
+      f"  eeg={self._eeg_brief()},\n"
+      f"  music={self._music_brief()}\n"
+      f")"
+    )
+
+  def __str__(self) -> str:
+    return self.pretty()
 
 
 class TrialMetadataRecord(TypedDict):
@@ -761,9 +826,7 @@ class EEGMusicDataset(torchdata.Dataset):
     to_keep: List[int] = []
     for i in range(len(self)):
       trial = self[i]
-      raw = trial.eeg_data.get_eeg().raw_eeg
-      sfreq = float(raw.info["sfreq"]) if "sfreq" in raw.info else raw.info["sfreq"]
-      eeg_duration_sec = raw.n_times / sfreq
+      eeg_duration_sec = trial.eeg_data.get_eeg().length_seconds()
       if (
         eeg_duration_sec >= min_trial_length_seconds
         and trial.music_data.get_music().length_seconds() >= min_trial_length_seconds
@@ -811,10 +874,12 @@ def prepare_trial(
   eeg_resample: Optional[int] = 256,
   eeg_l_freq: Optional[float] = None,
   eeg_h_freq: Optional[float] = None,
+  wav_resample: Optional[int] = None,
   apply_mel: Optional[MelParams] = None,
 ) -> TrialData[RawEeg, WavRAW | MelRaw]:
   """Set common length between music and eeg, resample eeg and filter eeg, transform music to mel spectrogram.
 
+  Optional music resampling, applied before mel transform if any.
   apply_mel: None -> keep music type; dict -> parameters for mel transform (see helper.wavraw_to_melspectrogram args).
   Supports WavRAW and MelRaw music types.
   """
@@ -826,18 +891,26 @@ def prepare_trial(
 
   music = trial.music_data.get_music()
   match music:
-    case WavRAW(raw_data=raw, sample_rate=sr):
+    case WavRAW(raw_data=raw, sample_rate=sr) as wav:
+      # let's do resampling first, then cropping. we dont cut length a lot here either way (for any speed gains)
+      if wav_resample is not None and wav_resample != sr:
+        wav = wav.resampled(new_sr=wav_resample)
+        raw, sr = wav.raw_data, wav.sample_rate
       max_samples = int(min_len * sr)
       music_cropped: MusicData = WavRAW(raw[:max_samples], sr)
       # (optional) apply mel transform could go here if apply_mel is not None
       if apply_mel is not None:
         music_cropped = wavraw_to_melspectrogram(music_cropped, **apply_mel.as_kwargs())
-    case MelRaw(mel=mel, sample_rate=sr, hop_length=hop):
+    case MelRaw(
+      mel=mel, sample_rate=sr, hop_length=hop, fmin=fmin, fmax=fmax, to_db=to_db
+    ):
       assert apply_mel is not None, (
         "Can't apply_mel if the input is already a mel spectrogram"
       )
       max_frames = int(min_len * sr / hop)
-      music_cropped = MelRaw(mel[:, :max_frames], sr, hop)
+      music_cropped = MelRaw(
+        mel[:, :max_frames], sr, hop, fmin=fmin, fmax=fmax, to_db=to_db
+      )
 
   if eeg_l_freq is not None or eeg_h_freq is not None:
     eeg: BaseRaw = cast(BaseRaw, eeg.filter(l_freq=eeg_l_freq, h_freq=eeg_h_freq))
@@ -885,7 +958,7 @@ def int_or_err(x: Fraction) -> int:
   return x.numerator
 
 
-class StratifiedSamplingDataset(torch.utils.data.Dataset):
+class StratifiedSamplingDataset(EEGMusicDataset):
   """
   Wrapper over ds, basically ds x n_strata.
   Indexing returns (trials, stratum_index).
@@ -900,27 +973,48 @@ class StratifiedSamplingDataset(torch.utils.data.Dataset):
     trial_length_secs: Fraction,
   ):
     """n_strata should be picked so that"""
-    super().__init__()
-    self.df = base_dataset.df
-    self.music_collection = base_dataset.music_collection
+    # super().__init__()
+    self.ds = base_dataset
     self.n_strata = n_strata  # type: ignore[assignment]
     self.trial_length_secs: Fraction = trial_length_secs
 
-  def __len__(self) -> int:
-    return len(self.df) * self.n_strata
+  @property
+  def df(self) -> pd.DataFrame:
+    """Get the dataframe from the base dataset."""
+    return self.ds.df
 
-  def __getitem__(self, idx: int) -> Tuple[TrialData[RawEeg, WavRAW | MelRaw]]:
+  @df.setter
+  def df(self, value: pd.DataFrame) -> None:
+    """Set the dataframe."""
+    self.ds.df = value
+
+  @property
+  def music_collection(self) -> Dict[MusicRef, MusicData]:  # type: ignore[reportIncompatibleVariableOverride]
+    """Get the music collection from the base dataset."""
+    return self.ds.music_collection
+
+  @music_collection.setter
+  def music_collection(self, value: Dict[MusicRef, MusicData]):  # type: ignore[reportIncompatibleVariableOverride]
+    """Set the music collection."""
+    self.ds.music_collection = value
+
+  def __len__(self) -> int:
+    return len(self.ds) * self.n_strata
+
+  def __getitem__(self, idx: int) -> TrialData[EegData, MusicData]:
+    #  -> TrialData[RawEeg, WavRAW | MelRaw]:
     """
     Here we return a portion of a trial, starting at a random index, within a stratum (for balancing).
     """
     trial_index = idx // self.n_strata
-    trial = super().__getitem__(trial_index)
+    trial: TrialData[EegData, MusicData] = self.ds.__getitem__(trial_index)
     stratum_index = idx % self.n_strata
 
     music_obj = trial.music_data.get_music()
+    eeg_obj = trial.eeg_data.get_eeg()
     m_len: float = music_obj.length_seconds()
-    eeg_raw = trial.eeg_data.get_eeg().raw_eeg
-    e_len: float = eeg_raw.length_seconds()
+    e_len: float = eeg_obj.length_seconds()
+    eeg_raw = eeg_obj.raw_eeg
     length = min(m_len, e_len)
 
     n_starts = int((length - self.trial_length_secs) * eeg_raw.info["sfreq"])
@@ -960,7 +1054,7 @@ class StratifiedSamplingDataset(torch.utils.data.Dataset):
           sample_rate=sample_rate,
         )
 
-      case MelRaw(mel, sample_rate, hop_length):
+      case MelRaw(mel, sample_rate, hop_length, fmin, fmax, to_db):
         new_length_samples: int = int_or_err(
           self.trial_length_secs * sample_rate / hop_length
         )
@@ -972,12 +1066,21 @@ class StratifiedSamplingDataset(torch.utils.data.Dataset):
           mel=mel[:, random_start_music : random_start_music + new_length_samples],
           sample_rate=sample_rate,
           hop_length=hop_length,
+          fmin=fmin,
+          fmax=fmax,
+          to_db=to_db,
         )
-      case _:
-        raise ValueError("Unknown music type")
 
-    trial.music_data = return_music
-    trial.eeg_data = RawEeg(raw_eeg=eeg_raw)
+    trial: TrialData[EegData, MusicData] = TrialData(
+      dataset=trial.dataset,
+      subject=trial.subject,
+      session=trial.session,
+      run=trial.run,
+      trial_id=trial.trial_id,
+      music_filename=trial.music_filename,
+      eeg_data=RawEeg(raw_eeg=eeg_raw),
+      music_data=return_music,
+    )
     return trial
 
 
@@ -1019,52 +1122,48 @@ def wavraw_to_melspectrogram(
   )
   if to_db:
     S = librosa.power_to_db(S, ref=np.max)
-  return MelRaw(mel=S, sample_rate=wav.sample_rate, hop_length=hop_length)
+  return MelRaw(
+    mel=S,
+    sample_rate=wav.sample_rate,
+    hop_length=hop_length,
+    fmin=fmin,
+    fmax=fmax,
+    to_db=to_db,
+  )
 
 
 def melspectrogram_figure(
-  spec: np.ndarray,
-  sample_rate: int,
-  fmin: float = 0.0,
-  fmax: float | None = None,
-  to_db: bool = True,
+  mel: MelRaw,
   cmap: str = "magma",
   title: str = "Mel-spectrogram",
 ):
   """Build and return a matplotlib Figure with the mel-spectrogram plot."""
-  S = spec
+  S = mel.mel
   fig, ax = plt.subplots(figsize=(8, 3))
   img = lbd.specshow(
     S,
     x_axis="time",
     y_axis="mel",
-    sr=sample_rate,
-    fmin=fmin,
-    fmax=fmax,
+    sr=mel.sample_rate,
+    fmin=mel.fmin,
+    fmax=mel.fmax,
     cmap=cmap,
     ax=ax,
   )
-  ax.set(title=title + (" (dB)" if to_db else ""))
+  ax.set(title=title + (" (dB)" if mel.to_db else ""))
   cbar = fig.colorbar(img, ax=ax)
-  cbar.set_label("dB" if to_db else "power")
+  cbar.set_label("dB" if mel.to_db else "power")
   fig.tight_layout()
   return fig
 
 
-def plot_melspectrogram(
-  wav: WavRAW,
-  **kwargs,
-):
+def mkplot_melspectrogram(wav: WavRAW, cmap="magma", title="Mel-spectrogram", **kwargs):
   """Plot the mel-spectrogram and show it. Returns the created Figure."""
   mel = wavraw_to_melspectrogram(wav, **kwargs)
   fig = melspectrogram_figure(
-    mel.mel,
-    sample_rate=mel.sample_rate,
-    fmin=kwargs.get("fmin", 0.0),
-    fmax=kwargs.get("fmax"),
-    to_db=kwargs.get("to_db", True),
-    cmap=kwargs.get("cmap", "magma"),
-    title=kwargs.get("title", "Mel-spectrogram"),
+    mel,
+    cmap=cmap,
+    title=title,
   )
-  plt.show()
+  # plt.show()
   return fig
