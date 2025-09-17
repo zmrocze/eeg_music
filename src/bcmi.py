@@ -78,8 +78,8 @@ from data import (
   TrainingMusicId,
   TrialRow,
   WavRAW,
+  onset_secs_to_samples,
 )
-from helper import onset_secs_to_samples
 from mne_bids import get_entity_vals, BIDSPath, read_raw_bids
 import pandas as pd
 from pathlib import Path
@@ -730,7 +730,7 @@ class BCMICalibrationLoader(BaseBCMILoader[RawEeg]):
           eeg_data=RawEeg(
             raw_eeg=r["raw"].copy().crop(t0, t0 + duration, include_tmax=False)
           ),
-          music_ref=music_filename,
+          music_filename=music_filename,
         )
 
   def music_iterator(self) -> Iterator[Tuple[MusicFilename, WavRAW]]:
@@ -897,7 +897,7 @@ class BCMITrainingLoader(BaseBCMILoader[RawEeg]):
           run=run,
           trial_id=f"trial_{trial_counter}",
           eeg_data=RawEeg(raw_eeg=r["raw"].copy().crop(t0, t1, include_tmax=False)),
-          music_ref=musicfile(False),
+          music_filename=musicfile(False),
         )
         trial_counter += 1
         yield TrialRow(
@@ -907,7 +907,7 @@ class BCMITrainingLoader(BaseBCMILoader[RawEeg]):
           run=run,
           trial_id=f"trial_{trial_counter}",
           eeg_data=RawEeg(raw_eeg=r["raw"].copy().crop(t1, t2, include_tmax=False)),
-          music_ref=musicfile(True),
+          music_filename=musicfile(True),
         )
 
   def music_iterator(self) -> Iterator[Tuple[MusicFilename, WavRAW]]:

@@ -16,7 +16,6 @@ from typing import (
   Tuple,
   cast,  # added
 )
-from helper import wavraw_to_melspectrogram
 import numpy as np
 from numpy.typing import NDArray
 from mne.io import BaseRaw
@@ -29,6 +28,9 @@ import shutil
 import torch
 import torch.utils.data as torchdata
 from speechbrain.dataio.batch import PaddedBatch
+import librosa
+import librosa.display as lbd
+import matplotlib.pyplot as plt
 
 
 class MusicData(ABC):
@@ -471,7 +473,9 @@ def copy_from_dataloader_into_dir(loader, base_dir: Path):
       music_data.save(stimuli_file)
       if loader.dataset_name not in existing_metadata.stimuli:
         existing_metadata.stimuli[loader.dataset_name] = []
-      if music_ref.filename not in existing_metadata.stimuli[loader.dataset_name]:
+      if (
+        music_ref.filename not in existing_metadata.stimuli[loader.dataset_name]
+      ):  # O(n) search!
         existing_metadata.stimuli[loader.dataset_name].append(music_ref.filename)
 
   # Save trials
@@ -482,7 +486,7 @@ def copy_from_dataloader_into_dir(loader, base_dir: Path):
       "session": trial.session,
       "run": trial.run,
       "trial_id": trial.trial_id,
-      "music_filename": trial.music_ref.filename,
+      "music_filename": trial.music_filename.filename,
     }
 
     eeg_path = make_eeg_path(
@@ -682,7 +686,7 @@ class EEGMusicDataset(torchdata.Dataset):
           "session": row.session,
           "run": row.run,
           "trial_id": row.trial_id,
-          "music_filename": row.music_ref.filename,
+          "music_filename": row.music_filename.filename,
         }
         for _, row in self.df.iterrows()
         # ^ assuming MappedDataset's map over __getitem__ doesn't change trial metadata, only data
@@ -975,3 +979,92 @@ class StratifiedSamplingDataset(torch.utils.data.Dataset):
     trial.music_data = return_music
     trial.eeg_data = RawEeg(raw_eeg=eeg_raw)
     return trial
+
+
+def onset_secs_to_samples(onset_secs, sfreq):
+  return round(onset_secs * sfreq)
+
+
+def wavraw_to_melspectrogram(
+  wav: WavRAW,
+  n_mels: int = 128,
+  n_fft: int = 2048,
+  hop_length: int = 512,
+  fmin: float = 0.0,
+  fmax: float | None = None,
+  center: bool = True,
+  power: float = 2.0,
+  to_db: bool = True,
+) -> MelRaw:
+  """Return MelRaw (mel-spectrogram + sr + hop_length) for a WavRAW.
+
+  Defaults: 128 mels, n_fft=2048, hop=512, power spectrogram, dB-scaled.
+  """
+  y = wav.raw_data if wav.raw_data.ndim == 1 else np.mean(wav.raw_data, axis=1)
+  y = y.astype(np.float32)
+  m = np.max(np.abs(y))
+  y = y / (m + 1e-12) if m > 1.0 else y
+  S = librosa.feature.melspectrogram(
+    y=y,
+    sr=wav.sample_rate,
+    n_fft=n_fft,
+    hop_length=hop_length,
+    n_mels=n_mels,
+    fmin=fmin,
+    fmax=fmax,
+    center=center,
+    power=power,
+    norm="slaney",
+    htk=False,
+  )
+  if to_db:
+    S = librosa.power_to_db(S, ref=np.max)
+  return MelRaw(mel=S, sample_rate=wav.sample_rate, hop_length=hop_length)
+
+
+def melspectrogram_figure(
+  spec: np.ndarray,
+  sample_rate: int,
+  fmin: float = 0.0,
+  fmax: float | None = None,
+  to_db: bool = True,
+  cmap: str = "magma",
+  title: str = "Mel-spectrogram",
+):
+  """Build and return a matplotlib Figure with the mel-spectrogram plot."""
+  S = spec
+  fig, ax = plt.subplots(figsize=(8, 3))
+  img = lbd.specshow(
+    S,
+    x_axis="time",
+    y_axis="mel",
+    sr=sample_rate,
+    fmin=fmin,
+    fmax=fmax,
+    cmap=cmap,
+    ax=ax,
+  )
+  ax.set(title=title + (" (dB)" if to_db else ""))
+  cbar = fig.colorbar(img, ax=ax)
+  cbar.set_label("dB" if to_db else "power")
+  fig.tight_layout()
+  return fig
+
+
+def plot_melspectrogram(
+  wav: WavRAW,
+  **kwargs,
+):
+  """Plot the mel-spectrogram and show it. Returns the created Figure."""
+  mel = wavraw_to_melspectrogram(wav, **kwargs)
+  fig = melspectrogram_figure(
+    mel.mel,
+    sample_rate=mel.sample_rate,
+    fmin=kwargs.get("fmin", 0.0),
+    fmax=kwargs.get("fmax"),
+    to_db=kwargs.get("to_db", True),
+    cmap=kwargs.get("cmap", "magma"),
+    title=kwargs.get("title", "Mel-spectrogram"),
+  )
+  plt.show()
+  return fig

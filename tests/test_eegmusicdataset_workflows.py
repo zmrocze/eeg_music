@@ -36,7 +36,7 @@ def limit_loader_iterators(loader, max_trials: int = 6):
 
   # Precompute limited trials
   limited_trials = list(itertools.islice(orig_trials(), max_trials))
-  needed = {t.music_ref.filename for t in limited_trials}
+  needed = {t.music_filename for t in limited_trials}
 
   def trial_iter():
     for t in limited_trials:
@@ -45,9 +45,8 @@ def limit_loader_iterators(loader, max_trials: int = 6):
   def music_iter():
     yielded = set()
     for ref, music in orig_music():
-      fn = getattr(ref, "filename", None)
-      if fn in needed and fn not in yielded:
-        yielded.add(fn)
+      if ref in needed and ref not in yielded:
+        yielded.add(ref)
         yield ref, music
 
   loader.trial_iterator = trial_iter
@@ -154,7 +153,7 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
       # Music collection should be disjoint union by MusicRef keys
       self.assertGreaterEqual(
         len(merged.music_collection),
-        max(len(cal_ds.music_collection), len(trn_ds.music_collection)),
+        len(cal_ds.music_collection) + len(trn_ds.music_collection),
       )
 
   # 5. remove_short_trials on combined dataset
@@ -221,12 +220,16 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
           self.assertEqual(len(ds2), len(ds))
           # Compare per-row identifiers
           a = (
-            ds.df[["dataset", "subject", "session", "run", "trial_id", "music_ref"]]
+            ds.df[
+              ["dataset", "subject", "session", "run", "trial_id", "music_filename"]
+            ]
             .copy()
             .reset_index(drop=True)
           )
           b = (
-            ds2.df[["dataset", "subject", "session", "run", "trial_id", "music_ref"]]
+            ds2.df[
+              ["dataset", "subject", "session", "run", "trial_id", "music_filename"]
+            ]
             .copy()
             .reset_index(drop=True)
           )

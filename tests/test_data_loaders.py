@@ -773,12 +773,14 @@ class TestTrialIterator(unittest.TestCase):
         self.assertHasAttr(trial, "session", "Trial should have session attribute")
         self.assertHasAttr(trial, "run", "Trial should have run attribute")
         self.assertHasAttr(trial, "trial_id", "Trial should have trial_id attribute")
-        self.assertHasAttr(trial, "music_ref", "Trial should have music_ref attribute")
+        self.assertHasAttr(
+          trial, "music_filename", "Trial should have music_filename attribute"
+        )
         self.assertHasAttr(trial, "eeg_data", "Trial should have eeg_data attribute")
 
         # Check that we can get music data through the music collection
         # (Note: music collection is on the loader, not the individual trial)
-        music_ref = trial.music_ref
+        music_ref = trial.music_filename
         self.assertIsNotNone(music_ref, "Trial should have music reference")
 
         # Check EEG data access
@@ -828,11 +830,13 @@ class TestTrialIterator(unittest.TestCase):
         self.assertHasAttr(trial, "session", "Trial should have session attribute")
         self.assertHasAttr(trial, "run", "Trial should have run attribute")
         self.assertHasAttr(trial, "trial_id", "Trial should have trial_id attribute")
-        self.assertHasAttr(trial, "music_ref", "Trial should have music_ref attribute")
+        self.assertHasAttr(
+          trial, "music_filename", "Trial should have music_filename attribute"
+        )
         self.assertHasAttr(trial, "eeg_data", "Trial should have eeg_data attribute")
 
         # Check that we can get music data through the music collection
-        music_ref = trial.music_ref
+        music_ref = trial.music_filename
         self.assertIsNotNone(music_ref, "Trial should have music reference")
 
         # Check EEG data access
@@ -908,7 +912,7 @@ class TestTrialIterator(unittest.TestCase):
           # Get music from loader's collection using the music_ref
           music_data = None
           for music_ref, music in loader.music_iterator():
-            if music_ref.filename == trial.music_ref.filename:
+            if music_ref.filename == trial.music_filename.filename:
               music_data = music
               break
           if music_data:
@@ -923,7 +927,7 @@ class TestTrialIterator(unittest.TestCase):
           # Get music from loader's collection using the music_ref
           music_data = None
           for music_ref, music in loader.music_iterator():
-            if music_ref.filename == trial.music_ref.filename:
+            if music_ref.filename == trial.music_filename.filename:
               music_data = music
               break
           if music_data:
@@ -1136,7 +1140,7 @@ class TestEEGMusicDatasetFiltering(unittest.TestCase):
         "session": "ses1",
         "run": "r1",
         "trial_id": "t1",
-        "music_ref": MusicFilename("a.wav"),
+        "music_filename": MusicFilename("a.wav"),
         "eeg_data": self._mk_eeg(12.0),
       },
       {
@@ -1145,7 +1149,7 @@ class TestEEGMusicDatasetFiltering(unittest.TestCase):
         "session": "ses1",
         "run": "r1",
         "trial_id": "t2",
-        "music_ref": MusicFilename("b.wav"),
+        "music_filename": MusicFilename("b.wav"),
         "eeg_data": self._mk_eeg(20.0),
       },
       {
@@ -1154,7 +1158,7 @@ class TestEEGMusicDatasetFiltering(unittest.TestCase):
         "session": "ses1",
         "run": "r1",
         "trial_id": "t3",
-        "music_ref": MusicFilename("a.wav"),
+        "music_filename": MusicFilename("a.wav"),
         "eeg_data": self._mk_eeg(5.0),
       },
     ]
