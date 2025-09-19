@@ -74,6 +74,7 @@ from data import (
   CalibrationMusicId,
   EegData,
   MusicFilename,
+  OnDiskMusic,
   RawEeg,
   TrainingMusicId,
   TrialRow,
@@ -84,7 +85,6 @@ from mne_bids import get_entity_vals, BIDSPath, read_raw_bids
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Iterator, Tuple, TypeVar, Generic
-from scipy.io import wavfile
 
 # TypeVar for EEG data in BCMI loaders
 E = TypeVar("E", bound=EegData)
@@ -752,8 +752,7 @@ class BCMICalibrationLoader(BaseBCMILoader[RawEeg]):
       music_path = stimuli_dir / music_ref.filename
 
       if music_path.exists():
-        sample_rate, audio_data = wavfile.read(music_path)
-        wav_raw = WavRAW(raw_data=audio_data.astype(float), sample_rate=sample_rate)
+        wav_raw = OnDiskMusic(filepath=music_path).get_music()
         yield music_ref, wav_raw
 
   def _get_experimental_info(self) -> Dict[str, Any]:
@@ -932,7 +931,9 @@ class BCMITrainingLoader(BaseBCMILoader[RawEeg]):
       session = int(session_part)
 
       # Create MusicFilename for both halves
-      sample_rate, audio_data = wavfile.read(wav_file)
+      music_file = OnDiskMusic(filepath=wav_file).get_music()
+      sample_rate, audio_data = music_file.sample_rate, music_file.raw_data
+
       mid_frame = len(audio_data) // 2
 
       def some_half(which_half):

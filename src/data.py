@@ -212,7 +212,7 @@ class TrainingMusicId(MusicID):
 class WavRAW(MusicData):
   """Data class containing raw WAV data and its rate."""
 
-  raw_data: NDArray[np.floating]  # Audio data as numpy array of float values
+  raw_data: NDArray[np.float32]  # Audio data as numpy array of float values
   sample_rate: int  # Sample rate in Hz
 
   def is_not_empty(self) -> bool:
@@ -236,7 +236,7 @@ class WavRAW(MusicData):
     wavfile.write(
       filepath if filepath.suffix else filepath.with_suffix(".wav"),
       self.sample_rate,
-      self.raw_data,
+      np.clip(self.raw_data, -1, 1),  # saved as float32
     )
 
   def resampled(self, new_sr: int) -> "WavRAW":
@@ -291,7 +291,16 @@ class OnDiskMusic(MusicData):
   def get_music(self) -> WavRAW:
     """Load and return the music as WavRAW data."""
     sample_rate, raw_data = wavfile.read(self.filepath)
-    scale = 32768.0 if raw_data.dtype == np.int16 else 2147483648.0
+    match raw_data.dtype:
+      case np.int16:
+        scale = 32768.0
+      case np.int32:
+        scale = 2147483648.0
+      case np.float32:
+        scale = 1.0
+      case _:
+        raise ValueError(f"Unsupported WAV data type: {raw_data.dtype}")
+
     raw_data = raw_data.astype(np.float32) / scale
     return WavRAW(raw_data=raw_data, sample_rate=sample_rate)
 
@@ -885,11 +894,11 @@ def prepare_trial(
   """
 
   eeg: BaseRaw = trial.eeg_data.get_eeg().raw_eeg
-  m_len = trial.music_data.get_music().length_seconds()
+  music = trial.music_data.get_music()
+  m_len = music.length_seconds()
   e_len = eeg.n_times / eeg.info["sfreq"]
   min_len = min(m_len, e_len)
 
-  music = trial.music_data.get_music()
   match music:
     case WavRAW(raw_data=raw, sample_rate=sr) as wav:
       # let's do resampling first, then cropping. we dont cut length a lot here either way (for any speed gains)
