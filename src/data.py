@@ -298,6 +298,8 @@ class OnDiskMusic(MusicData):
         scale = 2147483648.0
       case np.float32:
         scale = 1.0
+      case np.float64:
+        scale = 1.0
       case _:
         raise ValueError(f"Unsupported WAV data type: {raw_data.dtype}")
 

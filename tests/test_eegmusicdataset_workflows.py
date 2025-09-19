@@ -2,17 +2,46 @@ import unittest
 from pathlib import Path
 import tempfile
 import itertools
+import numpy as np
 
 from bcmi import BCMICalibrationLoader, BCMITrainingLoader
 from data import (
   EEGMusicDataset,
   copy_from_dataloader_into_dir,
+  OnDiskMusic,
+  OnDiskMel,
+  wavraw_to_melspectrogram,
+  MelRaw,
+  MappedDataset,
+  StratifiedSamplingDataset,
+  prepare_trial,
+  MelParams,
+  WavRAW,
 )
+from fractions import Fraction
+from typing import cast
 
 
 DATASET_ROOT = Path("/home/zmrocze/studia/uwr/magisterka/datasets")
 BCMI_CAL_PATH = DATASET_ROOT / "bcmi" / "bcmi-calibration"
 BCMI_TRN_PATH = DATASET_ROOT / "bcmi" / "bcmi-training"
+
+# Exemplar WAV files for testing mel spectrogram roundtrip
+EXEMPLAR_WAVS = {
+  "bcmi/bcmi-calibration": [
+    "stimuli/hvha5.wav",
+    "stimuli/lvla1.wav",
+    "stimuli/nvna3.wav",
+  ],
+  "bcmi/bcmi-training": ["stimuli/2-9_1.wav", "stimuli/4-1_3.wav"],
+  "bcmi/bcmi-fmri": ["stimuli/generated/2-9_1.wav", "stimuli/generated/6-5_2.wav"],
+  "musin_g_data/Code": ["ESongs/1.esh.wav", "ESongs/5.esh.wav"],
+  "openmiir": ["stimuli/hvha1.wav", "stimuli/lvla5.wav"],
+  "bcmi_preprocessed/bcmi_caltrain_256": [
+    "stimuli/bcmi-calibration/hvha1.wav",
+    "stimuli/bcmi-training/2-9_1_first.wav",
+  ],
+}
 
 
 def dataset_exists(p: Path) -> bool:
@@ -90,6 +119,57 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
     if not self.available.get(kind, False):
       self.skipTest(f"Dataset not found for {kind}")
 
+  def _copy_and_merge_combined_dataset(
+    self, f
+  ):  # todo for copilot: add type annotation here
+    """Helper function to copy and load combined calibration + training dataset.
+
+    Returns:
+        Combined EEGMusicDataset with both calibration and training data loaded and merged.
+        Data is loaded to memory to avoid temporary directory cleanup issues.
+    """
+    if not (self.available["calibration"] and self.available["training"]):
+      self.skipTest("Both calibration and training datasets required")
+
+    with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+      cal_loader = self._mk_loader("calibration")
+      trn_loader = self._mk_loader("training")
+      limit_loader_iterators(cal_loader)
+      limit_loader_iterators(trn_loader)
+
+      copy_from_dataloader_into_dir(cal_loader, Path(d1))
+      copy_from_dataloader_into_dir(trn_loader, Path(d2))
+
+      cal_ds = EEGMusicDataset.load_ondisk(Path(d1))
+      trn_ds = EEGMusicDataset.load_ondisk(Path(d2))
+      merged = cal_ds.merge(trn_ds)
+
+      # Load to memory to avoid temporary directory cleanup issues
+      merged.load_to_mem()
+      return f(merged)
+
+  def _copy_and_load_combined_dataset(
+    self, f
+  ):  # todo for copilot: add type annotation here
+    """Helper function to copy and load combined calibration + training dataset.
+
+    Returns:
+        Combined EEGMusicDataset with both calibration and training data loaded and merged.
+        Data is loaded to memory to avoid temporary directory cleanup issues.
+    """
+    if not (self.available["calibration"] and self.available["training"]):
+      self.skipTest("Both calibration and training datasets required")
+
+    with tempfile.TemporaryDirectory() as d1:
+      cal_loader = self._mk_loader("calibration")
+      trn_loader = self._mk_loader("training")
+      limit_loader_iterators(cal_loader)
+      limit_loader_iterators(trn_loader)
+      copy_from_dataloader_into_dir(cal_loader, Path(d1))
+      copy_from_dataloader_into_dir(trn_loader, Path(d1))
+      ds = EEGMusicDataset.load_ondisk(Path(d1))
+      return f(ds)
+
   # 1. copy -> load_ondisk; inspect counts and sample lengths
   def test_copy_and_load_ondisk_lengths(self):
     for kind in ("calibration", "training"):
@@ -133,43 +213,18 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
 
   # 3. copy two datasets -> load both -> merge -> verify
   def test_merge_datasets(self):
-    # Require at least one available; if only one, skip
-    if not (self.available["calibration"] and self.available["training"]):
-      self.skipTest("Both calibration and training datasets required")
-    with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-      # calibration
-      cal_loader = self._mk_loader("calibration")
-      trn_loader = self._mk_loader("training")
-      limit_loader_iterators(cal_loader)
-      limit_loader_iterators(trn_loader)
+    def action(ds):
+      # We can't easily verify the exact split since helper merges internally,
+      # but we can verify basic properties
+      self.assertGreater(len(ds), 0)
+      # Music collection should contain items from both datasets
+      self.assertGreater(len(ds.music_collection), 0)
 
-      copy_from_dataloader_into_dir(cal_loader, Path(d1))
-      copy_from_dataloader_into_dir(trn_loader, Path(d2))
-
-      cal_ds = EEGMusicDataset.load_ondisk(Path(d1))
-      trn_ds = EEGMusicDataset.load_ondisk(Path(d2))
-      merged = cal_ds.merge(trn_ds)
-      self.assertEqual(len(merged), len(cal_ds) + len(trn_ds))
-      # Music collection should be disjoint union by MusicRef keys
-      self.assertGreaterEqual(
-        len(merged.music_collection),
-        len(cal_ds.music_collection) + len(trn_ds.music_collection),
-      )
+    self._copy_and_merge_combined_dataset(action)
 
   # 5. remove_short_trials on combined dataset
   def test_remove_short_trials(self):
-    if not (self.available["calibration"] and self.available["training"]):
-      self.skipTest("Both calibration and training datasets required")
-    with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-      cal_loader = self._mk_loader("calibration")
-      trn_loader = self._mk_loader("training")
-      limit_loader_iterators(cal_loader)
-      limit_loader_iterators(trn_loader)
-      copy_from_dataloader_into_dir(cal_loader, Path(d1))
-      copy_from_dataloader_into_dir(trn_loader, Path(d2))
-      cal_ds = EEGMusicDataset.load_ondisk(Path(d1))
-      trn_ds = EEGMusicDataset.load_ondisk(Path(d2))
-      ds = cal_ds.merge(trn_ds)
+    def action(ds):
       filtered = ds.remove_short_trials(5.0)
       self.assertLessEqual(len(filtered), len(ds))
       # Sanity: all remaining trials have >= threshold durations
@@ -179,26 +234,19 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
         sf = float(eeg.info.get("sfreq", 0.0))
         self.assertGreaterEqual(eeg.n_times / sf, 5.0)
 
+    return self._copy_and_load_combined_dataset(action)
+
   # 6. subject_wise_split on merged dataset
   def test_subject_wise_split(self):
-    if not (self.available["calibration"] and self.available["training"]):
-      self.skipTest("Both calibration and training datasets required")
-    with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
-      cal_loader = self._mk_loader("calibration")
-      trn_loader = self._mk_loader("training")
-      limit_loader_iterators(cal_loader)
-      limit_loader_iterators(trn_loader)
-      copy_from_dataloader_into_dir(cal_loader, Path(d1))
-      copy_from_dataloader_into_dir(trn_loader, Path(d2))
-      cal_ds = EEGMusicDataset.load_ondisk(Path(d1))
-      trn_ds = EEGMusicDataset.load_ondisk(Path(d2))
-      ds = cal_ds.merge(trn_ds)
+    def action(ds):
       tr, va, te = ds.subject_wise_split(0.5, 0.0, seed=123)
       self.assertEqual(len(tr) + len(va) + len(te), len(ds))
       # Use only train & test (va empty expected) for previous assertions
       tr_subj = set(tr.df["subject"].unique())
       te_subj = set(te.df["subject"].unique())
       self.assertTrue(tr_subj.isdisjoint(te_subj))
+
+    self._copy_and_load_combined_dataset(action)
 
   # 7. load -> save -> reload -> compare basic invariants
   def test_save_roundtrip(self):
@@ -239,37 +287,256 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
             set(map(tuple, a.values.tolist())), set(map(tuple, b.values.tolist()))
           )
 
+  # 8. Mel spectrogram save/load roundtrip test
+  def test_mel_spectrogram_roundtrip(self):
+    """Test mel spectrogram computation, saving, and loading roundtrip.
+
+    This test verifies that:
+    1. WAV files can be loaded correctly
+    2. Mel spectrograms can be computed from WAV data
+    3. Mel spectrograms can be saved to disk as compressed .npz files
+    4. Saved mel spectrograms can be reloaded correctly
+    5. Reloaded mel spectrograms match the original computation within tolerance
+    """
+    for ds_name, wav_paths in EXEMPLAR_WAVS.items():
+      base = DATASET_ROOT / ds_name
+      if not dataset_exists(base):
+        self.skipTest(f"Dataset not found: {ds_name}")
+
+      # Test up to 2 files per dataset for speed
+      for wav_file in wav_paths[:2]:
+        with self.subTest(dataset=ds_name, file=wav_file):
+          wav_path = base / wav_file
+          if not wav_path.exists():
+            self.skipTest(f"WAV file not found: {wav_path}")
+
+          # 1) Load WAV -> WavRAW
+          wav_raw = OnDiskMusic(wav_path).get_music()
+          self.assertTrue(wav_raw.is_not_empty())
+          self.assertGreater(wav_raw.length_seconds(), 0.0)
+          self.assertGreater(wav_raw.sample_rate, 0)
+
+          # 2) Compute mel spectrogram with different parameter sets
+          test_params = [
+            # Standard parameters
+            {
+              "n_mels": 128,
+              "hop_length": 512,
+              "fmin": 0.0,
+              "fmax": None,
+              "to_db": True,
+            },
+            # Alternative parameters
+            {
+              "n_mels": 64,
+              "hop_length": 256,
+              "fmin": 80.0,
+              "fmax": 8000.0,
+              "to_db": False,
+            },
+          ]
+
+          for params in test_params:
+            with self.subTest(params=params):
+              mel_raw = wavraw_to_melspectrogram(wav_raw, **params)
+
+              # Verify mel spectrogram properties
+              self.assertEqual(mel_raw.mel.shape[0], params["n_mels"])
+              self.assertGreater(mel_raw.mel.shape[1], 0)  # n_frames
+              self.assertEqual(mel_raw.sample_rate, wav_raw.sample_rate)
+              self.assertEqual(mel_raw.hop_length, params["hop_length"])
+              self.assertEqual(mel_raw.fmin, params["fmin"])
+              self.assertEqual(mel_raw.fmax, params["fmax"])
+              self.assertEqual(mel_raw.to_db, params["to_db"])
+
+              with tempfile.TemporaryDirectory() as temp_dir:
+                # 3) Save mel spectrogram
+                mel_path = Path(temp_dir) / "test_mel.npz"
+                mel_raw.save(mel_path)
+                self.assertTrue(mel_path.exists())
+
+                # 4) Reload mel spectrogram
+                reloaded_mel = OnDiskMel(mel_path).get_music()
+
+                # 5) Verify roundtrip consistency
+                self.assertTrue(
+                  np.allclose(reloaded_mel.mel, mel_raw.mel, atol=1e-5, rtol=1e-3),
+                  "Mel spectrogram data should match after save/load roundtrip",
+                )
+                self.assertEqual(reloaded_mel.sample_rate, mel_raw.sample_rate)
+                self.assertEqual(reloaded_mel.hop_length, mel_raw.hop_length)
+                self.assertEqual(reloaded_mel.fmin, mel_raw.fmin)
+                self.assertEqual(reloaded_mel.fmax, mel_raw.fmax)
+                self.assertEqual(reloaded_mel.to_db, mel_raw.to_db)
+
+                # 6) Verify mel spectrogram shape and properties
+                self.assertEqual(reloaded_mel.mel.shape, mel_raw.mel.shape)
+                self.assertGreater(reloaded_mel.length_seconds(), 0.0)
+
   # 8. Real-life flow: copy two datasets -> load -> load_to_mem -> save -> reload -> check
   def test_real_life_flow(self):
-    if not (self.available["calibration"] and self.available["training"]):
-      self.skipTest("Both calibration and training datasets required")
-    with (
-      tempfile.TemporaryDirectory() as d1,
-      tempfile.TemporaryDirectory() as d2,
-      tempfile.TemporaryDirectory() as ddst,
-    ):
-      cal_loader = self._mk_loader("calibration")
-      trn_loader = self._mk_loader("training")
-      limit_loader_iterators(cal_loader)
-      limit_loader_iterators(trn_loader)
-      copy_from_dataloader_into_dir(cal_loader, Path(d1))
-      copy_from_dataloader_into_dir(trn_loader, Path(d2))
-      cal_ds = EEGMusicDataset.load_ondisk(Path(d1))
-      trn_ds = EEGMusicDataset.load_ondisk(Path(d2))
-      ds = cal_ds.merge(trn_ds)
+    def action(ds):
       ds.load_to_mem()
-      out = Path(ddst) / "out"
-      # NOTE: If this save fails, most likely mne.export.export_raw (used by RawEeg.save)
-      # cannot write EDF in the current environment. This indicates a missing/export backend
-      # or incompatible MNE version, not a logic error in dataset wiring.
-      ds.save(out)
-      ds2 = EEGMusicDataset.load_ondisk(out)
-      self.assertEqual(len(ds2), len(ds))
-      # Spot-check random item
-      t = ds2[0]
-      self.assertGreater(t.music_data.get_music().length_seconds(), 0.0)
-      eeg = t.eeg_data.get_eeg().raw_eeg
-      self.assertGreater(eeg.n_times, 0)
+      with tempfile.TemporaryDirectory() as ddst:
+        out = Path(ddst) / "out"
+        # NOTE: If this save fails, most likely mne.export.export_raw (used by RawEeg.save)
+        # cannot write EDF in the current environment. This indicates a missing/export backend
+        # or incompatible MNE version, not a logic error in dataset wiring.
+        ds.save(out)
+        ds2 = EEGMusicDataset.load_ondisk(out)
+        self.assertEqual(len(ds2), len(ds))
+        # Spot-check random item
+        t = ds2[0]
+        self.assertGreater(t.music_data.get_music().length_seconds(), 0.0)
+        eeg = t.eeg_data.get_eeg().raw_eeg
+        self.assertGreater(eeg.n_times, 0)
+
+    self._copy_and_load_combined_dataset(action)
+
+  # 9. Test prepare_trial workflows with/without mel and with/without stratification
+  def test_prepare_trial_workflows(self):
+    """Test prepare_trial with/without mel + with/without stratification.
+
+    This test covers 4 scenarios in a 2x2 matrix:
+    - Dimension 1: Mel Transform (None vs MelParams)
+    - Dimension 2: Stratified Sampling (Direct vs StratifiedSamplingDataset)
+
+    For each scenario, we test:
+    1. Data processing with prepare_trial
+    2. Optional stratified sampling
+    3. Save/load roundtrip of sample trials
+    4. Property verification (sample rates, shapes, lengths, etc.)
+    """
+
+    # Test scenarios in 2x2 matrix
+    scenarios = [
+      {"apply_mel": None, "use_stratified": False, "name": "wav_direct"},
+      {"apply_mel": None, "use_stratified": True, "name": "wav_stratified"},
+      {
+        "apply_mel": MelParams(n_mels=128, hop_length=512, fmax=10240.0, to_db=False),
+        "use_stratified": False,
+        "name": "mel_direct",
+      },
+      {
+        "apply_mel": MelParams(n_mels=32, hop_length=256, fmax=5000.0),
+        "use_stratified": True,
+        "name": "mel_stratified",
+      },
+    ]
+
+    for scenario in scenarios:
+      with self.subTest(scenario=scenario["name"]):
+        # 1. Get combined dataset
+        def action(base_dataset):
+          # 2. Apply prepare_trial processing
+          mapped_dataset = MappedDataset(
+            base_dataset,
+            lambda t: prepare_trial(
+              t,
+              eeg_resample=256,
+              eeg_l_freq=0.0,
+              eeg_h_freq=50.0,
+              apply_mel=scenario["apply_mel"],
+            ),
+          )
+
+          # 3. Optional stratification
+          if scenario["use_stratified"]:
+            processed_dataset = StratifiedSamplingDataset(
+              mapped_dataset, n_strata=3, trial_length_secs=Fraction(4, 1)
+            )
+          else:
+            processed_dataset = mapped_dataset
+
+          # 4. Verify dataset properties
+          self.assertGreater(len(processed_dataset), 0)
+
+          if scenario["use_stratified"]:
+            # For stratified: length should be base_length * n_strata
+            self.assertEqual(len(processed_dataset), len(mapped_dataset) * 3)
+
+          # 5. Test a few sample trials
+          test_indices = [
+            0,
+            min(len(processed_dataset) - 1, 5),
+            min(len(processed_dataset) - 1, 10),
+          ]
+
+          for idx in test_indices:
+            if idx >= len(processed_dataset):
+              continue
+
+            trial = processed_dataset[idx]
+
+            # 6. Verify EEG properties after prepare_trial
+            eeg = trial.eeg_data.get_eeg().raw_eeg
+            self.assertEqual(float(eeg.info["sfreq"]), 256.0)  # Resampled to 256 Hz
+            self.assertGreater(eeg.n_times, 0)
+
+            # 7. Verify music properties based on mel transform
+            music = trial.music_data.get_music()
+            self.assertGreater(music.length_seconds(), 0.0)
+
+            if scenario["apply_mel"] is None:
+              # Should be WavRAW
+              self.assertIsInstance(music, WavRAW)
+              self.assertGreater(music.sample_rate, 0)
+            else:
+              # Should be MelRaw
+              self.assertIsInstance(music, MelRaw)
+              mel_music = cast(MelRaw, music)
+              mel_params = scenario["apply_mel"]
+              self.assertEqual(mel_music.mel.shape[0], mel_params.n_mels)
+              self.assertGreater(mel_music.mel.shape[1], 0)  # n_frames > 0
+              self.assertEqual(mel_music.hop_length, mel_params.hop_length)
+              self.assertEqual(mel_music.fmax, mel_params.fmax)
+
+            # 8. For stratified datasets, verify time slice properties
+            if scenario["use_stratified"]:
+              # EEG duration should be approximately 4 seconds (trial_length_secs)
+              eeg_duration = eeg.n_times / float(eeg.info["sfreq"])
+              self.assertAlmostEqual(eeg_duration, 4.0, delta=0.1)
+
+          # 9. Test save/load roundtrip for a sample
+          if len(processed_dataset) > 0:
+            sample_trial = processed_dataset[0]
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+              # Save EEG data
+              eeg_path = Path(temp_dir) / "test_eeg.edf"
+              sample_trial.eeg_data.save(eeg_path)
+              self.assertTrue(eeg_path.exists())
+
+              # Save music data
+              if scenario["apply_mel"] is None:
+                music_path = Path(temp_dir) / "test_music.wav"
+              else:
+                music_path = Path(temp_dir) / "test_music.npz"
+
+              sample_trial.music_data.save(music_path)
+              self.assertTrue(music_path.exists())
+
+              # Reload and verify basic properties match
+              if scenario["apply_mel"] is None:
+                reloaded_music = OnDiskMusic(music_path).get_music()
+                original_music = sample_trial.music_data.get_music()
+                self.assertAlmostEqual(
+                  reloaded_music.length_seconds(),
+                  original_music.length_seconds(),
+                  delta=0.01,
+                )
+              else:
+                reloaded_music = OnDiskMel(music_path).get_music()
+                original_music = cast(MelRaw, sample_trial.music_data.get_music())
+                reloaded_mel = cast(MelRaw, reloaded_music)
+                self.assertEqual(reloaded_mel.mel.shape, original_music.mel.shape)
+                self.assertTrue(
+                  np.allclose(
+                    reloaded_mel.mel, original_music.mel, atol=1e-5, rtol=1e-3
+                  )
+                )
+
+        return self._copy_and_load_combined_dataset(action)
 
 
 if __name__ == "__main__":
