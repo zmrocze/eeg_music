@@ -1,0 +1,3 @@
+[submodule "submodules/EEGPT"]
+	path = submodules/EEGPT
+	url = https://github.com/BINE022/EEGPT.git

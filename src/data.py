@@ -260,9 +260,8 @@ class MelRaw(MusicData):
     return self.mel.shape[1] * self.hop_length / self.sample_rate
 
   def save(self, filepath: Path):
-    tgt = filepath if filepath.suffix else filepath.with_suffix(".npz")
     np.savez_compressed(
-      tgt,
+      filepath,
       mel=self.mel,
       sample_rate=self.sample_rate,
       hop_length=self.hop_length,
@@ -333,19 +332,20 @@ class OnDiskMel(MusicData):
     )
 
   def save(self, filepath: Path) -> None:
-    tgt = filepath if filepath.suffix else filepath.with_suffix(".npz")
-    shutil.copy2(self.filepath, tgt)
+    shutil.copy2(self.filepath, filepath)
 
 
-@dataclass
+# @dataclass
 class RawEeg(EegData):
   """EEG data stored in memory."""
 
-  raw_eeg: BaseRaw
+  def __init__(self, raw_eeg: BaseRaw):
+    self.raw_eeg = raw_eeg
+    self.raw_eeg.load_data()
 
   def get_eeg(self) -> "RawEeg":
     """Get the EEG data."""
-    self.raw_eeg.load_data()
+    # self.raw_eeg.load_data()
     return self
 
   def length_seconds(self) -> float:
@@ -887,6 +887,8 @@ def prepare_trial(
   eeg_h_freq: Optional[float] = None,
   wav_resample: Optional[int] = None,
   apply_mel: Optional[MelParams] = None,
+  # remove_channels: Optional[List[str]] = None,
+  pick_channels: Optional[List[str]] = None,
 ) -> TrialData[RawEeg, WavRAW | MelRaw]:
   """Set common length between music and eeg, resample eeg and filter eeg, transform music to mel spectrogram.
 
@@ -896,6 +898,7 @@ def prepare_trial(
   """
 
   eeg: BaseRaw = trial.eeg_data.get_eeg().raw_eeg
+  eeg = eeg.copy()
   music = trial.music_data.get_music()
   m_len = music.length_seconds()
   e_len = eeg.n_times / eeg.info["sfreq"]
@@ -915,7 +918,7 @@ def prepare_trial(
     case MelRaw(
       mel=mel, sample_rate=sr, hop_length=hop, fmin=fmin, fmax=fmax, to_db=to_db
     ):
-      assert apply_mel is not None, (
+      assert apply_mel is None, (
         "Can't apply_mel if the input is already a mel spectrogram"
       )
       max_frames = int(min_len * sr / hop)
@@ -926,11 +929,14 @@ def prepare_trial(
   if eeg_l_freq is not None or eeg_h_freq is not None:
     eeg: BaseRaw = cast(BaseRaw, eeg.filter(l_freq=eeg_l_freq, h_freq=eeg_h_freq))
   eeg: BaseRaw = cast(
-    BaseRaw, eeg.copy() if eeg_resample is None else eeg.copy().resample(eeg_resample)
+    BaseRaw, eeg if eeg_resample is None else eeg.resample(eeg_resample)
   )
   eeg = eeg.crop(
     tmax=(min(min_len, eeg.times[-1]))
   )  # when l=e_len then eeg_times[-1] is that 1s/sample_rate early to l which errors
+
+  if pick_channels:
+    eeg = eeg.pick(pick_channels)
 
   return TrialData(
     dataset=trial.dataset,
@@ -944,6 +950,24 @@ def prepare_trial(
   )
 
 
+def rereference_trial(
+  trial: TrialData[EegData, MusicData],
+) -> TrialData[EegData, MusicData]:
+  """Rereference the EEG data in a trial."""
+  eeg = trial.eeg_data.get_eeg().raw_eeg.copy()
+  mne.set_eeg_reference(eeg, ref_channels="average")
+  return TrialData(
+    dataset=trial.dataset,
+    subject=trial.subject,
+    session=trial.session,
+    run=trial.run,
+    trial_id=trial.trial_id,
+    music_filename=trial.music_filename,
+    music_data=trial.music_data,
+    eeg_data=RawEeg(eeg),
+  )
+
+
 class MappedDataset(EEGMusicDataset):
   """Dataset with a mapping function applied to each trial on access."""
 
@@ -953,13 +977,31 @@ class MappedDataset(EEGMusicDataset):
     ### map_fn is assumed to only change the held data, but keep the ids (dataset, subject, ...) constant!
     map_fn: Callable[[TrialData[EegData, MusicData]], TrialData[E, M]],
   ):
-    super().__init__()
-    self.df = base_dataset.df
-    self.music_collection = base_dataset.music_collection
+    self.ds = base_dataset
     self.map_fn = map_fn  # type: ignore[assignment]
 
+  @property
+  def df(self) -> pd.DataFrame:
+    """Get the dataframe from the base dataset."""
+    return self.ds.df
+
+  @df.setter
+  def df(self, value: pd.DataFrame) -> None:
+    """Set the dataframe."""
+    self.ds.df = value
+
+  @property
+  def music_collection(self) -> Dict[MusicRef, MusicData]:  # type: ignore[reportIncompatibleVariableOverride]
+    """Get the music collection from the base dataset."""
+    return self.ds.music_collection
+
+  @music_collection.setter
+  def music_collection(self, value: Dict[MusicRef, MusicData]):  # type: ignore[reportIncompatibleVariableOverride]
+    """Set the music collection."""
+    self.ds.music_collection = value
+
   def __getitem__(self, idx: int) -> TrialData[EegData, MusicData]:
-    trial = super().__getitem__(idx)
+    trial = self.ds.__getitem__(idx)
     return cast(TrialData[EegData, MusicData], self.map_fn(trial))
 
 
