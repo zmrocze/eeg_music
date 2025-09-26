@@ -261,8 +261,8 @@ class MelRaw(MusicData):
 
   def save(self, filepath: Path):
     # Ensure .npz extension since np.savez_compressed adds it automatically
-    if filepath.suffix != '.npz':
-      filepath = filepath.with_suffix(filepath.suffix + '.npz')
+    if filepath.suffix != ".npz":
+      filepath = filepath.with_suffix(filepath.suffix + ".npz")
     np.savez_compressed(
       filepath,
       mel=self.mel,
@@ -336,8 +336,8 @@ class OnDiskMel(MusicData):
 
   def save(self, filepath: Path) -> None:
     # Ensure .npz extension for consistency with MelRaw.save()
-    if filepath.suffix != '.npz':
-      filepath = filepath.with_suffix(filepath.suffix + '.npz')
+    if filepath.suffix != ".npz":
+      filepath = filepath.with_suffix(filepath.suffix + ".npz")
     shutil.copy2(self.filepath, filepath)
 
 
@@ -790,22 +790,21 @@ class EEGMusicDataset(torchdata.Dataset):
     stimuli_dir = base_dir / "stimuli"
     for dataset_name, music_filenames in metadata.stimuli.items():
       for music_filename in music_filenames:
-        music_file_path = stimuli_dir / dataset_name / music_filename
         music_ref = MusicRef(
           filename=MusicFilename(filename=music_filename), dataset=dataset_name
         )
         expected_path = stimuli_dir / dataset_name / music_filename
-        if expected_path.suffix == '.wav' and not expected_path.exists():
-            # Try .wav.npz version
-            npz_path = expected_path.with_suffix('.wav.npz')
-            if npz_path.exists():
-                dataset.music_collection[music_ref] = OnDiskMel(filepath=npz_path)
-            else:
-                dataset.music_collection[music_ref] = OnDiskMusic(filepath=expected_path)
-        elif expected_path.suffix == '.npz':
-            dataset.music_collection[music_ref] = OnDiskMel(filepath=expected_path)
-        else:
+        if expected_path.suffix == ".wav" and not expected_path.exists():
+          # Try .wav.npz version
+          npz_path = expected_path.with_suffix(".wav.npz")
+          if npz_path.exists():
+            dataset.music_collection[music_ref] = OnDiskMel(filepath=npz_path)
+          else:
             dataset.music_collection[music_ref] = OnDiskMusic(filepath=expected_path)
+        elif expected_path.suffix == ".npz":
+          dataset.music_collection[music_ref] = OnDiskMel(filepath=expected_path)
+        else:
+          dataset.music_collection[music_ref] = OnDiskMusic(filepath=expected_path)
 
     # Create dataframe from trial metadata
     eeg_dir = base_dir / "eeg"
@@ -1116,7 +1115,7 @@ class StratifiedSamplingDataset(EEGMusicDataset):
         tot_m = music_obj.length_samples()
 
         random_start_music = round((tot_m * random_start) / n_starts_exact)
-        random_start_music = min(random_start_music, tot_m - new_length_samples + 1)
+        random_start_music = min(random_start_music, tot_m - new_length_samples)
         return_music = WavRAW(
           raw_data=raw_data[
             random_start_music : random_start_music + new_length_samples
@@ -1130,7 +1129,7 @@ class StratifiedSamplingDataset(EEGMusicDataset):
         )
         tot_m = music_obj.mel.shape[-1]
         random_start_music = round((tot_m * random_start) / n_starts_exact)
-        random_start_music = min(random_start_music, tot_m - new_length_samples + 1)
+        random_start_music = min(random_start_music, tot_m - new_length_samples)
 
         return_music = MelRaw(
           mel=mel[:, random_start_music : random_start_music + new_length_samples],
