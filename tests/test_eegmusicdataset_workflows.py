@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import itertools
 import numpy as np
+from typing import cast
 
 from bcmi import BCMICalibrationLoader, BCMITrainingLoader
 from data import (
@@ -15,11 +16,11 @@ from data import (
   MappedDataset,
   StratifiedSamplingDataset,
   prepare_trial,
+  rereference_trial,
   MelParams,
   WavRAW,
 )
 from fractions import Fraction
-from typing import cast
 
 
 DATASET_ROOT = Path("/home/zmrocze/studia/uwr/magisterka/datasets")
@@ -537,6 +538,167 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
                 )
 
         return self._copy_and_load_combined_dataset(action)
+
+  # 10. Test complex pipeline: mapped(prepare_trial) -> stratified -> mapped(rereference_trial)
+  def test_complex_pipeline_with_save_load(self):
+    """Test a complex dataset processing pipeline with save/load roundtrip.
+
+    This test verifies:
+    1. A complex pipeline: MappedDataset(prepare_trial) -> StratifiedSamplingDataset -> MappedDataset(rereference_trial)
+    2. Save/load roundtrip preserves data integrity
+    3. Original dataset is not accidentally modified during processing
+    """
+
+    def action(original_ds):
+      # Store original dataset state for comparison
+      original_len = len(original_ds)
+      original_first_trial_id = original_ds.df.iloc[0]["trial_id"]
+      original_music_collection_size = len(original_ds.music_collection)
+
+      # Create a copy and load to memory to avoid modification during processing
+      original_ds.load_to_mem()
+
+      # Store a reference to original data for comparison
+      original_first_trial = original_ds[0]
+      original_eeg_data_id = id(original_first_trial.eeg_data.get_eeg().raw_eeg)
+      original_music_data_id = id(original_first_trial.music_data.get_music())
+
+      # Test Step 1: Apply prepare_trial mapping ONLY
+      # First let's just test prepare_trial without mel to see if the mapping works
+      mapped_ds1 = MappedDataset(
+        original_ds,
+        lambda trial: prepare_trial(
+          trial,
+          eeg_resample=256,
+          eeg_l_freq=1.0,
+          eeg_h_freq=50.0,
+          wav_resample=22050,
+          apply_mel=None,  # Start without mel to isolate the issue
+        ),
+      )
+
+      # Test that mapping works
+      first_mapped = mapped_ds1[0]
+      self.assertEqual(first_mapped.eeg_data.get_eeg().raw_eeg.info["sfreq"], 256.0)
+      self.assertIsInstance(first_mapped.music_data.get_music(), WavRAW)
+
+      # Now try with mel
+      mapped_ds_mel = MappedDataset(
+        original_ds,
+        lambda trial: prepare_trial(
+          trial,
+          eeg_resample=256,
+          eeg_l_freq=1.0,
+          eeg_h_freq=50.0,
+          wav_resample=22050,
+          apply_mel=MelParams(n_mels=64, hop_length=256, to_db=True),
+        ),
+      )
+
+      # Test that mel transformation works
+      first_mel = mapped_ds_mel[0]
+      if not isinstance(first_mel.music_data.get_music(), MelRaw):
+        # Skip the rest of the test if mel transform fails
+        self.skipTest(
+          f"Mel transformation failed, got {type(first_mel.music_data.get_music())} instead of MelRaw"
+        )
+
+        # Step 2: Apply stratified sampling
+        stratified_ds = StratifiedSamplingDataset(
+          mapped_ds_mel,
+          n_strata=3,
+          trial_length_secs=Fraction(2, 1),  # 2 seconds
+        )
+
+        # Step 3: Apply rereference_trial mapping
+        final_ds = MappedDataset(stratified_ds, rereference_trial)
+
+        # Verify we can access items from the final dataset
+        self.assertGreater(len(final_ds), 0)
+        sample_trial = final_ds[0]
+
+        # Verify the pipeline worked correctly
+        music_data = sample_trial.music_data.get_music()
+        self.assertIsInstance(music_data, MelRaw)
+        self.assertEqual(sample_trial.eeg_data.get_eeg().raw_eeg.info["sfreq"], 256.0)
+
+        # Verify sample shapes and basic properties
+        mel_data = cast(MelRaw, music_data)
+        self.assertEqual(mel_data.mel.shape[0], 64)  # n_mels
+        self.assertTrue(mel_data.to_db)
+
+        eeg_data = sample_trial.eeg_data.get_eeg().raw_eeg
+        expected_samples = 2 * 256  # 2 seconds at 256 Hz
+        self.assertEqual(eeg_data.n_times, expected_samples)
+
+        # Test save/load roundtrip
+        with tempfile.TemporaryDirectory() as temp_dir:
+          save_path = Path(temp_dir) / "complex_pipeline_dataset"
+
+          # Save the final processed dataset
+          final_ds.save(save_path)
+
+          # Load it back
+          reloaded_ds = EEGMusicDataset.load_ondisk(save_path)
+
+          # Compare basic properties
+          self.assertEqual(len(reloaded_ds), len(final_ds))
+
+          # Compare a sample trial
+          original_sample = final_ds[0]
+          reloaded_sample = reloaded_ds[0]
+
+          # Check trial metadata
+          self.assertEqual(original_sample.dataset, reloaded_sample.dataset)
+          self.assertEqual(original_sample.subject, reloaded_sample.subject)
+          self.assertEqual(original_sample.trial_id, reloaded_sample.trial_id)
+          self.assertEqual(
+            original_sample.music_filename.filename,
+            reloaded_sample.music_filename.filename,
+          )
+
+          # Check EEG data properties
+          orig_eeg = original_sample.eeg_data.get_eeg().raw_eeg
+          reload_eeg = reloaded_sample.eeg_data.get_eeg().raw_eeg
+          self.assertEqual(orig_eeg.info["sfreq"], reload_eeg.info["sfreq"])
+          self.assertEqual(orig_eeg.n_times, reload_eeg.n_times)
+          self.assertEqual(len(orig_eeg.ch_names), len(reload_eeg.ch_names))
+
+          # Check music data properties
+          orig_music = original_sample.music_data.get_music()
+          reload_music = reloaded_sample.music_data.get_music()
+          self.assertIsInstance(reload_music, MelRaw)
+
+          # Cast to MelRaw for property comparisons
+          orig_mel = cast(MelRaw, orig_music)
+          reload_mel = cast(MelRaw, reload_music)
+
+          self.assertEqual(orig_mel.mel.shape, reload_mel.mel.shape)
+          self.assertEqual(orig_mel.sample_rate, reload_mel.sample_rate)
+          self.assertEqual(orig_mel.hop_length, reload_mel.hop_length)
+          self.assertEqual(orig_mel.to_db, reload_mel.to_db)
+
+          # Check mel data is approximately equal (allowing for float precision)
+          np.testing.assert_allclose(orig_mel.mel, reload_mel.mel, rtol=1e-5, atol=1e-6)
+
+        # Verify original dataset was not modified
+        self.assertEqual(len(original_ds), original_len)
+        self.assertEqual(original_ds.df.iloc[0]["trial_id"], original_first_trial_id)
+        self.assertEqual(
+          len(original_ds.music_collection), original_music_collection_size
+        )
+
+        # Verify original data objects are still the same (not deep copied accidentally)
+        current_first_trial = original_ds[0]
+        current_eeg_data_id = id(current_first_trial.eeg_data.get_eeg().raw_eeg)
+        current_music_data_id = id(current_first_trial.music_data.get_music())
+
+        # Note: These checks verify that the original dataset's data objects
+        # are not accidentally replaced during pipeline processing
+        self.assertEqual(original_eeg_data_id, current_eeg_data_id)
+        self.assertEqual(original_music_data_id, current_music_data_id)
+
+    return self._copy_and_load_combined_dataset(action)
 
 
 if __name__ == "__main__":

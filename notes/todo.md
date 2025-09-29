@@ -6,6 +6,9 @@
 
  - [ ] figure out why the difference in calibration music
 
+ - [ ] Verify: !!!! Dataset in Volts; model forward scales to μV/100 (V→μV→÷100) before mapper
+       https://github.com/BINE022/EEGPT/issues/24
+
 ## miscs
 
  - [ ] fix hardcoded dataset paths in tests

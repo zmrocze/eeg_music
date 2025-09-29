@@ -25,7 +25,14 @@ dependencies = [
   "torch",
   "torcheeg",
   "speechbrain",
+  "peft",
+  "transformers",
+  
+  "eegpt",
 ]
+
+[tool.uv.sources]
+eegpt = { path = "./submodules/EEGPT" }
 
 [project.optional-dependencies]
 dev = [
