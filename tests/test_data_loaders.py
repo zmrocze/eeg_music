@@ -42,7 +42,7 @@ import pandas as pd
 from functools import wraps
 
 
-from bcmi import (
+from eeg_music.bcmi import (
   create_bcmi_loader,
   # load_all_bcmi_datasets,
   BCMICalibrationLoader,
@@ -52,10 +52,10 @@ from bcmi import (
   BCMIScoresLoader,
   BCMIFMRILoader,
 )
-from musing import MUSINGDataset
-from nmed_t import NMEDTLoader
-from openmiir import OpenMIIRLoader
-from data import EEGMusicDataset, RawEeg, WavRAW, MusicRef, MusicFilename
+from eeg_music.musing import MUSINGDataset
+from eeg_music.nmed_t import NMEDTLoader
+from eeg_music.openmiir import OpenMIIRLoader
+from eeg_music.data import EEGMusicDataset, RawEeg, WavRAW, MusicRef, MusicFilename
 import numpy as np
 import mne
 

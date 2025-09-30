@@ -4,8 +4,8 @@ Test script to demonstrate the freeze_all_except_head_and_adapters function.
 
 from pathlib import Path
 
-from eegpt import EegptLightning, EegptConfig
-from freeze_utils import freeze_all_except_head_and_adapters, count_parameters
+from eeg_music.eegpt import EegptLightning, EegptConfig
+from eeg_music.freeze_utils import freeze_all_except_head_and_adapters, count_parameters
 
 
 def test_freeze_function():

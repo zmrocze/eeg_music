@@ -5,8 +5,8 @@ import itertools
 import numpy as np
 from typing import cast
 
-from bcmi import BCMICalibrationLoader, BCMITrainingLoader
-from data import (
+from eeg_music.bcmi import BCMICalibrationLoader, BCMITrainingLoader
+from eeg_music.data import (
   EEGMusicDataset,
   copy_from_dataloader_into_dir,
   OnDiskMusic,
@@ -21,7 +21,7 @@ from data import (
   WavRAW,
   RepeatedDataset,
 )
-from dataloader import mel_create_collate_fn
+from eeg_music.dataloader import mel_create_collate_fn
 from fractions import Fraction
 
 
