@@ -19,7 +19,7 @@ from lightning.pytorch.callbacks import (
   OnExceptionCheckpoint,
   RichProgressBar,
 )
-from eegpt import EegptLightning, EegptConfig
+from eegpt import EegptLightning, EegptConfig, LRCosine, EEG_WIDTH, USING_CHANNELS
 
 
 @dataclass
@@ -30,7 +30,6 @@ class TrainingConfig:
   data_path: Path = Path("./datasets/bcmi_combined_prepared_mel_28ch")
   data_loader_num_workers: int = 4
   batch_size: int = 8
-  lr: float = 1e-4
   num_epochs: int = 100
   save_model_per_epochs: int = 5
   val_every_n_epoch: int = 5
@@ -41,6 +40,9 @@ class TrainingConfig:
   run_extra_name: str = "lr_find"
   randint: int = random.randint(0, 1000)
   save_path: str = f"{run_name}-ckpt"
+
+  lr_config: Union[float, LRCosine] = 1e-4
+
   use_learning_rate_finder: bool = False
 
 
@@ -117,11 +119,65 @@ class SpectrogramLoggingCallback(Callback):
       log_spectrograms(pl_module, y_hat, y, batch_idx, stage="test")
 
 
+def log_hyperparameters(model, dataloaders, config, wandb_logger):
+  params_to_log = {}
+
+  # Parameter counts
+  params_to_log["trainable_params_total"] = count_n_params(model)
+  if hasattr(model.model.model, "chan_conv"):
+    params_to_log["trainable_params_chan_conv"] = count_n_params(
+      model.model.model.chan_conv
+    )
+  params_to_log["trainable_params_residual_linear"] = count_n_params(model.model.linear)
+  params_to_log["trainable_params_head"] = count_n_params(model.model.model.head)
+
+  # ResidualLinear dimensions
+  params_to_log["residual_linear_in_dim"] = model.model.linear.linear1.in_features
+  params_to_log["residual_linear_out_dim"] = model.model.linear.linear2.out_features
+
+  # EEGPTClassifier params
+  eegpt_classifier = model.model.model
+  params_to_log["eegpt_classifier_use_chan_conv"] = eegpt_classifier.use_chan_conv
+
+  # Target Encoder params
+  target_encoder = eegpt_classifier.target_encoder
+  params_to_log["target_encoder_img_size"] = str(target_encoder.patch_embed.img_size)
+  params_to_log["target_encoder_patch_size"] = target_encoder.patch_embed.patch_size
+  params_to_log["target_encoder_embed_dim"] = target_encoder.embed_dim
+  params_to_log["target_encoder_depth"] = len(target_encoder.blocks)
+  params_to_log["target_encoder_num_heads"] = target_encoder.num_heads
+  params_to_log["target_encoder_patch_stride"] = target_encoder.patch_embed.patch_stride
+
+  # Predictor params
+  if eegpt_classifier.use_predictor:
+    predictor = eegpt_classifier.predictor
+    params_to_log["predictor_embed_dim"] = predictor.predictor_embed.in_features
+    params_to_log["predictor_depth"] = len(predictor.predictor_blocks)
+    params_to_log["predictor_num_heads"] = predictor.predictor_blocks[0].attn.num_heads
+
+  # EEG data params
+  params_to_log["eeg_width"] = EEG_WIDTH
+  params_to_log["using_channels"] = USING_CHANNELS
+
+  # Dataloader params
+  params_to_log["dataloader_train_size"] = len(dataloaders["train"])
+  params_to_log["dataloader_val_size"] = len(dataloaders["val"])
+  params_to_log["dataloader_test_size"] = len(dataloaders["test"])
+  params_to_log["batch_size"] = config.batch_size
+  params_to_log["num_workers"] = config.data_loader_num_workers
+
+  wandb_logger.log_hyperparams(params_to_log)
+
+
 def main(config=config):
   device = "cuda" if torch.cuda.is_available() else "cpu"
   dataloaders = load_and_create_dataloaders(config.data_path, config)
-
-  eegpt_config = EegptConfig(chpt_path=config.eegpt_chpt_path, lr=config.lr)
+  assert (
+    isinstance(config.lr_config, float) if config.use_learning_rate_finder else True
+  )
+  eegpt_config = EegptConfig(
+    chpt_path=config.eegpt_chpt_path, lr_config=config.lr_config
+  )
   model = EegptLightning(eegpt_config)
 
   wandb_logger = WandbLogger(
@@ -167,6 +223,8 @@ def main(config=config):
   )
 
   print(f"Model trainable params: {count_n_params(model)}")
+
+  log_hyperparameters(model, dataloaders, config, wandb_logger)
 
   trainer.fit(
     model,
