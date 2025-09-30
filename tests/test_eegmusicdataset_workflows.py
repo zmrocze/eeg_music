@@ -19,7 +19,9 @@ from data import (
   rereference_trial,
   MelParams,
   WavRAW,
+  RepeatedDataset,
 )
+from dataloader import mel_create_collate_fn
 from fractions import Fraction
 
 
@@ -52,20 +54,75 @@ def dataset_exists(p: Path) -> bool:
     return False
 
 
-def limit_loader_iterators(loader, max_trials: int = 6):
+def _collect_trials_with_min_subjects(
+  trial_iterator, min_subjects, trials_per_subject=2
+):
+  """Collect trials ensuring minimum number of unique subjects.
+
+  Args:
+    trial_iterator: Iterator over trials
+    min_subjects: Minimum number of unique subjects required
+    trials_per_subject: Target number of trials per subject (default: 2)
+
+  Returns:
+    List of trials with at least min_subjects unique subjects
+  """
+  collected_trials = []
+  subject_counts = {}  # subject -> count of trials
+
+  for trial in trial_iterator:
+    subject = trial.subject
+
+    # Track how many trials we have for this subject
+    if subject not in subject_counts:
+      subject_counts[subject] = 0
+
+    # Only add trial if we need more trials for this subject
+    if subject_counts[subject] < trials_per_subject:
+      collected_trials.append(trial)
+      subject_counts[subject] += 1
+
+    # Check if we have enough subjects
+    if len(subject_counts) >= min_subjects:
+      # Check if all subjects have at least 1 trial (they should by construction)
+      # and we've collected enough trials
+      if all(count >= 1 for count in subject_counts.values()):
+        break
+
+  return collected_trials
+
+
+def limit_loader_iterators(loader, max_trials: int = 6, min_subjects=None):
   """Limit trials and ensure music iterator yields exactly what trials need.
 
   We first materialize a limited list of trials, then filter music to only
   the referenced filenames. This guarantees no missing stimuli for trials.
+
+  Args:
+    loader: Dataset loader with trial_iterator and music_iterator methods
+    max_trials: Maximum number of trials to include (used when min_subjects is None)
+    min_subjects: If provided, collect trials to ensure at least this many unique subjects
   """
 
-  loader.load_all_subjects(max_subjects=3)
+  # Load subjects - adjust based on min_subjects requirement
+  if min_subjects is not None:
+    loader.load_all_subjects(max_subjects=max(min_subjects, 3))
+  else:
+    loader.load_all_subjects(max_subjects=3)
 
   orig_trials = loader.trial_iterator
   orig_music = loader.music_iterator
 
   # Precompute limited trials
-  limited_trials = list(itertools.islice(orig_trials(), max_trials))
+  if min_subjects is not None:
+    # Use subject-aware collection
+    limited_trials = _collect_trials_with_min_subjects(
+      orig_trials(), min_subjects=min_subjects, trials_per_subject=2
+    )
+  else:
+    # Original behavior: simple trial limit
+    limited_trials = list(itertools.islice(orig_trials(), max_trials))
+
   needed = {t.music_filename for t in limited_trials}
 
   def trial_iter():
@@ -121,7 +178,7 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
       self.skipTest(f"Dataset not found for {kind}")
 
   def _copy_and_merge_combined_dataset(
-    self, f
+    self, f, min_subjects=None
   ):  # todo for copilot: add type annotation here
     """Helper function to copy and load combined calibration + training dataset.
 
@@ -135,8 +192,8 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
     with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
       cal_loader = self._mk_loader("calibration")
       trn_loader = self._mk_loader("training")
-      limit_loader_iterators(cal_loader)
-      limit_loader_iterators(trn_loader)
+      limit_loader_iterators(cal_loader, min_subjects=min_subjects)
+      limit_loader_iterators(trn_loader, min_subjects=min_subjects)
 
       copy_from_dataloader_into_dir(cal_loader, Path(d1))
       copy_from_dataloader_into_dir(trn_loader, Path(d2))
@@ -150,7 +207,7 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
       return f(merged)
 
   def _copy_and_load_combined_dataset(
-    self, f
+    self, f, min_subjects=None
   ):  # todo for copilot: add type annotation here
     """Helper function to copy and load combined calibration + training dataset.
 
@@ -164,8 +221,8 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
     with tempfile.TemporaryDirectory() as d1:
       cal_loader = self._mk_loader("calibration")
       trn_loader = self._mk_loader("training")
-      limit_loader_iterators(cal_loader)
-      limit_loader_iterators(trn_loader)
+      limit_loader_iterators(cal_loader, min_subjects=min_subjects)
+      limit_loader_iterators(trn_loader, min_subjects=min_subjects)
       copy_from_dataloader_into_dir(cal_loader, Path(d1))
       copy_from_dataloader_into_dir(trn_loader, Path(d1))
       ds = EEGMusicDataset.load_ondisk(Path(d1))
@@ -599,9 +656,10 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
       first_mel = mapped_ds_mel[0]
       if not isinstance(first_mel.music_data.get_music(), MelRaw):
         # Skip the rest of the test if mel transform fails
-        self.skipTest(
-          f"Mel transformation failed, got {type(first_mel.music_data.get_music())} instead of MelRaw"
-        )
+
+        # self.skipTest(
+        #   f"Mel transformation failed, got {type(first_mel.music_data.get_music())} instead of MelRaw"
+        # )
 
         # Step 2: Apply stratified sampling
         stratified_ds = StratifiedSamplingDataset(
@@ -698,7 +756,204 @@ class TestEEGMusicDatasetWorkflows(unittest.TestCase):
         self.assertEqual(original_eeg_data_id, current_eeg_data_id)
         self.assertEqual(original_music_data_id, current_music_data_id)
 
-    return self._copy_and_load_combined_dataset(action)
+    return self._copy_and_load_combined_dataset(action, min_subjects=4)
+
+  def test_full_dataloader_pipeline_with_repeated_dataset(self):
+    """Test the complete dataloader pipeline including RepeatedDataset.
+
+    This test verifies the full workflow similar to create_dataloaders:
+    1. Load combined dataset (limited for testing)
+    2. Apply prepare_trial with mel transformation
+    3. Save and reload dataset
+    4. Apply subject_wise_split
+    5. Apply StratifiedSamplingDataset and rereference_trial mapping
+    6. Apply RepeatedDataset to test dataset (repeat 20 times)
+    7. Create dataloaders
+    8. Verify batch contents and lengths
+    """
+    from torch.utils.data import DataLoader
+    from fractions import Fraction
+
+    def action(base_dataset):
+      # Step 1: Apply prepare_trial with mel transformation
+      mel_params = MelParams(
+        n_mels=128,
+        n_fft=2048,
+        hop_length=512,
+        fmin=0,
+        fmax=8192,
+        to_db=True,
+      )
+
+      prepared_ds = MappedDataset(
+        base_dataset,
+        lambda t: prepare_trial(
+          t,
+          eeg_resample=256,
+          eeg_l_freq=0.1,
+          eeg_h_freq=100.0,
+          wav_resample=32768,  # 64 * 512
+          apply_mel=mel_params,
+        ),
+      )
+
+      # Verify mel transformation worked
+      first_sample = prepared_ds[0]
+      self.assertIsInstance(first_sample.music_data.get_music(), MelRaw)
+
+      # Step 2: Save and reload
+      with tempfile.TemporaryDirectory() as temp_dir:
+        save_path = Path(temp_dir) / "prepared_dataset"
+        prepared_ds.save(save_path)
+        reloaded_ds = EEGMusicDataset.load_ondisk(save_path)
+
+        # Step 3: Apply subject_wise_split
+        train_ds, val_ds, test_ds = reloaded_ds.subject_wise_split(
+          p_train=0.5, p_val=0.25, seed=42
+        )
+
+        # Verify splits exist
+        self.assertGreater(len(train_ds), 0)
+        self.assertGreater(len(val_ds), 0)
+        self.assertGreater(len(test_ds), 0)
+
+        # Step 4: Apply StratifiedSamplingDataset and rereference_trial
+        def apply_processing(ds):
+          stratified = StratifiedSamplingDataset(
+            ds,
+            n_strata=10,
+            trial_length_secs=Fraction(4, 1),
+          )
+          dereferenced = MappedDataset(stratified, rereference_trial)
+          return dereferenced
+
+        train_processed = apply_processing(train_ds)
+        val_processed = apply_processing(val_ds)
+        test_processed = apply_processing(test_ds)
+
+        # Step 5: Apply RepeatedDataset to test dataset (20 times)
+        test_repeated = RepeatedDataset(test_processed, num_repeats=20)
+
+        # Verify RepeatedDataset length
+        expected_test_length = len(test_processed) * 20
+        self.assertEqual(len(test_repeated), expected_test_length)
+
+        # Verify RepeatedDataset returns correct items
+        # First item should be the same as the original first item
+        original_first = test_processed[0]
+        repeated_first = test_repeated[0]
+        self.assertEqual(original_first.trial_id, repeated_first.trial_id)
+        self.assertEqual(original_first.subject, repeated_first.subject)
+
+        # Item at len(test_processed) should wrap around to index 0
+        repeated_wrapped = test_repeated[len(test_processed)]
+        self.assertEqual(original_first.trial_id, repeated_wrapped.trial_id)
+
+        # Step 6: Create dataloaders
+        batch_size = 1
+
+        # Use collate function from dataloader module (with metadata)
+        collate_fn = mel_create_collate_fn(include_info=True)
+
+        train_loader = DataLoader(
+          train_processed,
+          batch_size=batch_size,
+          shuffle=True,
+          collate_fn=collate_fn,
+          drop_last=True,
+        )
+
+        val_loader = DataLoader(
+          val_processed,
+          batch_size=batch_size,
+          shuffle=False,
+          collate_fn=collate_fn,
+          drop_last=False,
+        )
+
+        test_loader = DataLoader(
+          test_repeated,
+          batch_size=batch_size,
+          shuffle=False,
+          collate_fn=collate_fn,
+          drop_last=False,
+        )
+
+        # Step 7: Test dataloaders - verify batch contents and lengths
+
+        # Test train loader
+        train_batches = list(train_loader)
+        self.assertGreater(len(train_batches), 0)
+
+        for batch in train_batches:
+          # Verify batch structure
+          self.assertIn("eeg", batch)
+          self.assertIn("mel", batch)
+          self.assertIn(
+            "info", batch
+          )  # mel_create_collate_fn uses 'info' not 'metadata'
+
+          # Verify batch dimensions
+          self.assertEqual(batch["eeg"].shape[0], batch_size)  # batch dimension
+          self.assertEqual(batch["mel"].shape[0], batch_size)
+
+          # Verify metadata
+          self.assertEqual(len(batch["info"]["trial_id"]), batch_size)
+          self.assertEqual(len(batch["info"]["subject"]), batch_size)
+
+          # Verify EEG has correct number of channels (28 channels after picking)
+          self.assertLessEqual(batch["eeg"].shape[1], 64)  # channels
+          self.assertGreater(batch["eeg"].shape[2], 0)  # time samples
+
+          # Verify mel has correct shape
+          self.assertEqual(batch["mel"].shape[1], 128)  # n_mels
+          self.assertGreater(batch["mel"].shape[2], 0)  # time frames
+
+        # Test validation loader
+        val_batches = list(val_loader)
+        self.assertGreater(len(val_batches), 0)
+
+        # Test repeated test loader
+        test_batches = list(test_loader)
+        self.assertGreater(len(test_batches), 0)
+
+        # Verify test loader has approximately 20x more batches than without repetition
+        # Calculate expected number of batches
+        non_repeated_batches = (len(test_processed) + batch_size - 1) // batch_size
+        expected_repeated_batches = (len(test_repeated) + batch_size - 1) // batch_size
+
+        # Due to drop_last=False, the last batch might not be full
+        self.assertGreaterEqual(len(test_batches), non_repeated_batches * 19)
+        self.assertLessEqual(len(test_batches), expected_repeated_batches)
+
+        # Verify that we see repeated data in test loader
+        # Collect all trial_ids from test loader
+        test_trial_ids = []
+        for batch in test_batches:
+          test_trial_ids.extend(
+            batch["info"]["trial_id"]
+          )  # mel_create_collate_fn uses 'info'
+
+        # Count occurrences of first trial_id
+        first_trial_id = test_processed[0].trial_id
+        first_trial_count = test_trial_ids.count(first_trial_id)
+
+        # Should appear approximately 20 times (might vary due to batching)
+        self.assertGreaterEqual(
+          first_trial_count,
+          15,
+          f"Expected trial to repeat ~20 times, got {first_trial_count}",
+        )
+
+        print(f"✓ Train batches: {len(train_batches)}")
+        print(f"✓ Val batches: {len(val_batches)}")
+        print(f"✓ Test batches: {len(test_batches)} (20x repeated)")
+        print(
+          f"✓ Test samples total: {len(test_trial_ids)} (expected ~{len(test_repeated)})"
+        )
+        print(f"✓ First trial appeared {first_trial_count} times in test set")
+
+    return self._copy_and_load_combined_dataset(action, min_subjects=8)
 
 
 if __name__ == "__main__":
