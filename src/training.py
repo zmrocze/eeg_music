@@ -1,65 +1,50 @@
-from diffusers import DiffusionPipeline
+from pathlib import Path
+
+from lightning import Callback, Trainer
+from dataloader import load_and_create_dataloaders
 import torch
 
-# from prefigure.prefigure import push_wandb_config
-from torch import optim
-import pytorch_lightning as pl
-import torchtune.training
+# import lightning as pl
+# import lightning
+from lightning.pytorch.loggers import WandbLogger
+
+# .pytorch.loggers.wandb
 import wandb
-import torchtune
-from datasets import load_from_disk
-from dataclasses import dataclass
-
-# import torch_audiomentations as taug
+from dataclasses import dataclass, asdict
+from typing import Literal, Optional, Union
 import random
-
-# import diffusers
-from pytorch_lightning.callbacks import RichProgressBar
-
-
-def todo():
-  raise NotImplementedError("This needs to be todoed")
+from lightning.pytorch.callbacks import (
+  LearningRateFinder,
+  ModelCheckpoint,
+  OnExceptionCheckpoint,
+  RichProgressBar,
+)
+from eegpt import EegptLightning, EegptConfig
 
 
 @dataclass
 class TrainingConfig:
-  model_name = "unlocked-250k"
-  data_path = "./rock_dataset_resampled"
-  eeg_sample_size = todo()
-  music_sample_rate = todo()
-  data_loader_num_workers = 4
-  batch_size = 8
-  # val_batch_size = 4
-  lr = 4e-5
-  lr_warmup_steps = 5  # epochs
-  T_mul = 2
-  num_cycles = 0.5  # cosine annealing cycles
-  num_epochs = 100
-  # save_image_epochs = 10
-  save_model_per_epochs = 30
-  val_every = 5
-  # save_demo = True
-  ckpt_load_path = None  # 'best', 'last', <path]>
-  wandb_log_model = "all"
-  check_val_every_n_epoch = 5
-  # mixed_precision = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
-  output_dir = f"ddim-lora-{model_name}"  # the model name locally and on the HF Hub
-  randint = random.randint(0, 1000)
-  name = f"ddim-lora-{model_name}-{randint}"  # the name of the wandb run
-  project_name = "neural-music-decoding"
-  save_path = f"{name}-ckpt"
-  # overwrite_output_dir = True  # overwrite the old model when re-running the notebook
-  # seed = 42
+  eegpt_chpt_path: Path = Path(
+    "./model_checkpoints/25866970/EEGPT/checkpoint/eegpt_mcae_58chs_4s_large4E.ckpt"
+  )
+  data_path: Path = Path("./datasets/bcmi_combined_prepared_mel_28ch")
+  data_loader_num_workers: int = 4
+  batch_size: int = 8
+  lr: float = 1e-4
+  num_epochs: int = 100
+  save_model_per_epochs: int = 5
+  val_every_n_epoch: int = 5
+  ckpt_load_path: Optional[str] = None  # 'best', 'last', <path]>
+  wandb_log_model: Union[Literal["all"], bool] = "all"
+  project_name: str = "neural-music-decoding"
+  run_name: str = "eegpt-2layer-mel"
+  run_extra_name: str = "lr_find"
+  randint: int = random.randint(0, 1000)
+  save_path: str = f"{run_name}-ckpt"
+  use_learning_rate_finder: bool = False
 
 
 config = TrainingConfig()
-
-
-def optional(x, bool):
-  if bool:
-    return [x]
-  else:
-    return []
 
 
 def count_n_params(model):
@@ -67,137 +52,132 @@ def count_n_params(model):
   return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-class EegptSpectrogram(pl.LightningModule):
-  def __init__(self, config):  # todo: config
-    super().__init__()
-    self.config = config
-    self.rng = torch.quasirandom.SobolEngine(1, scramble=True, seed=42)
+def log_spectrograms(pl_module, y_hat, y, batch_idx, stage: str, n_samples=4):
+  """Log a batch of predicted and ground truth spectrograms to wandb."""
+  y_hat = y_hat.detach().cpu()[:n_samples]
+  y = y.detach().cpu()[:n_samples]
 
-  def configure_optimizers(self):
-    optimizer = optim.AdamW(self.model.parameters(), lr=config.lr)
-    #  torchtune.modules.get_cosine_schedule_with_warmup(optimizer: Optimizer, num_warmup_steps: int, num_training_steps: int, num_cycles: float = 0.5, last_epoch: int = - 1) → LambdaLR[source]
-    lr_schedule = torchtune.training.get_cosine_schedule_with_warmup(
-      optimizer,
-      num_warmup_steps=config.lr_warmup_steps,
-      num_training_steps=config.num_epochs,
-      num_cycles=config.num_cycles,
-      last_epoch=-1,
-    )
-    return {
-      "optimizer": optimizer,
-      "lr_scheduler": {
-        "scheduler": lr_schedule,
-        "interval": "epoch",  # or "epoch"
-        "frequency": 1,
-      },
-    }
+  images = []
+  for i, (pred_spec, true_spec) in enumerate(zip(y_hat, y)):
+    # # Normalize for visualization
+    # pred_spec = (pred_spec - pred_spec.min()) / (pred_spec.max() - pred_spec.min() + 1e-8)
+    # true_spec = (true_spec - true_spec.min()) / (true_spec.max() - true_spec.min() + 1e-8)
 
-  # @property
-  # def model(self):
-  #   return self.pipe.unet
+    # Combine pred and true for side-by-side comparison
+    combined_spec = torch.cat((pred_spec, true_spec), dim=1)
 
-  def log_some_samples(self, val_x, val_y):
-    "Log images to wandb and save them to disk"
-
-    # val_x: (batch, audio_len) (unused here), val_y: (batch, freq, time) spectrograms
-    specs = val_y.detach().cpu()
-    images = []
-    for i, spec in enumerate(specs):
-      s = spec.float()
-      s = (s - s.min()) / (s.max() - s.min() + 1e-8)
-      images.append(wandb.Image(s.numpy(), caption=f"spectrogram_{i}"))
-    self.logger.experiment.log({"val/spectrograms": images}, step=self.global_step)
-
-  def training_step(self, batch, batch_idx):
-    # noise, noise_pred = self.random_timestep_forward(batch)
-    # loss = F.mse_loss(noise_pred, noise)
-    loss = self.forward_dance_diffusion(batch)
-    self.log_dict(
-      {"train/loss": loss.detach()},
-      prog_bar=True,
-      on_step=True,
-      on_epoch=True,
-      batch_size=self.config.batch_size,
+    images.append(
+      wandb.Image(combined_spec.numpy(), caption=f"Pred vs. True (Sample {i})")
     )
 
-    return loss
-
-  def validation_step(self, batch, batch_idx):
-    # noise, noise_pred = self.random_timestep_forward(batch)
-    # loss = F.mse_loss(noise_pred, noise)
-    loss = self.forward_dance_diffusion(batch)
-    self.log_dict({"val/loss": loss.detach()}, prog_bar=True)
-
-    return loss
-
-  def metrics(self):
-    pass
+  pl_module.logger.experiment.log(
+    {f"{stage}/spectrograms": images}, step=pl_module.global_step
+  )
 
 
-class DemoCallback(pl.Callback):
-  def __init__(self, config):
+class SpectrogramLoggingCallback(Callback):
+  def __init__(self):
     super().__init__()
-    self.demo_every = config.demo_every
-    self.n_samples = config.n_samples
+    self.val_log_batch_idx = 0
+    self.test_log_batch_idx = 0
 
-  def on_train_start(self, trainer, pl_module):
-    print("Logging some initial samples...")
-    pl_module.log_some_samples(trainer.global_step, self.n_samples)
+  def on_validation_epoch_start(self, trainer, pl_module):
+    """Choose a random batch to log for this validation epoch."""
+    if trainer.val_dataloaders:
+      num_batches = len(trainer.val_dataloaders)
+      if num_batches > 0:
+        self.val_log_batch_idx = random.randint(0, num_batches - 1)
 
-  def on_train_epoch_end(self, trainer, pl_module):
-    if (trainer.current_epoch + 1) % self.demo_every == 0:
-      pl_module.log_some_samples(trainer.global_step, self.n_samples)
+  def on_test_epoch_start(self, trainer, pl_module):
+    """Choose a random batch to log for this test epoch."""
+    if trainer.test_dataloaders:
+      # Assuming single test dataloader
+      num_batches = len(trainer.test_dataloaders)
+      if num_batches > 0:
+        self.test_log_batch_idx = random.randint(0, num_batches - 1)
+
+  def on_validation_batch_end(
+    self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+  ):
+    """Log spectrograms at the end of each validation batch."""
+    if batch_idx == self.val_log_batch_idx:
+      x = batch["eeg"]
+      y = batch["mel"]
+      y_hat = pl_module(x)
+      log_spectrograms(pl_module, y_hat, y, batch_idx, stage="val")
+
+  def on_test_batch_end(
+    self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+  ):
+    """Log spectrograms at the end of each test batch."""
+    if batch_idx == self.test_log_batch_idx:
+      x = batch["eeg"]
+      y = batch["mel"]
+      y_hat = pl_module(x)
+      log_spectrograms(pl_module, y_hat, y, batch_idx, stage="test")
 
 
 def main(config=config):
   device = "cuda" if torch.cuda.is_available() else "cpu"
-  data = load_from_disk(config.data_path)
-  data_loaders = make_dataloaders(data, config)
-  pipe = DiffusionPipeline.from_pretrained(f"harmonai/{config.model_name}")
-  pipe.to(device)
-  wandb_logger = pl.loggers.WandbLogger(
-    project=config.project_name,
-    name=config.name,
-    log_model=config.wandb_log_model,
-    config=config,
-  )
-  save_on_exc = pl.callbacks.OnExceptionCheckpoint(
-    f"{config.save_path}/exc_save",
-  )
-  ckpt_callback = pl.callbacks.ModelCheckpoint(
-    every_n_epochs=1,
-    save_on_train_epoch_end=False,  # together with every_n_epochs and check_val_every_n_epoch, this will save the model on validation, that is on check_val_every_n_epoch
-    auto_insert_metric_name=True,
-    mode="min",
-    monitor="val/loss",
-    save_top_k=2,
-    dirpath=config.save_path,
-    save_last=True,
-  )
-  demo_callback = DemoCallback(config)
+  dataloaders = load_and_create_dataloaders(config.data_path, config)
 
-  apply_lora(pipe.unet, config)
-  model = DiffusionUncond(pipe, config)
+  eegpt_config = EegptConfig(chpt_path=config.eegpt_chpt_path, lr=config.lr)
+  model = EegptLightning(eegpt_config)
+
+  wandb_logger = WandbLogger(
+    project=config.project_name,
+    name=f"{config.run_name}-{config.run_extra_name}-{config.randint}",
+    log_model=config.wandb_log_model,
+    config=asdict(config),
+  )
 
   wandb_logger.watch(model, log="all")
 
-  trainer = pl.Trainer(
-    # precision=16,
-    accumulate_grad_batches=config.gradient_accumulation_steps,
-    callbacks=[ckpt_callback, demo_callback, RichProgressBar(), save_on_exc],
-    logger=wandb_logger,
-    check_val_every_n_epoch=config.check_val_every_n_epoch,
-    # log_every_n_steps=1,
-    max_epochs=config.num_epochs,
+  save_on_exc = OnExceptionCheckpoint(
+    f"{config.save_path}/exc_save",
   )
 
-  print(f"Model.unet trainable params: {count_n_params(model.model)}")
+  ckpt_callback = ModelCheckpoint(
+    every_n_epochs=config.save_model_per_epochs,
+    dirpath=config.save_path,
+    save_top_k=2,
+    monitor="val_loss",
+    mode="min",
+    save_last=True,
+  )
+
+  optional_lr_finder = (
+    [LearningRateFinder(min_lr=1e-08, max_lr=1, num_training_steps=100)]
+    if config.use_learning_rate_finder
+    else []
+  )
+
+  trainer = Trainer(
+    callbacks=[
+      ckpt_callback,
+      SpectrogramLoggingCallback(),
+      RichProgressBar(),
+      save_on_exc,
+    ]
+    + optional_lr_finder,
+    logger=wandb_logger,
+    check_val_every_n_epoch=config.val_every_n_epoch,
+    max_epochs=config.num_epochs,
+    accelerator=device,
+  )
+
+  print(f"Model trainable params: {count_n_params(model)}")
 
   trainer.fit(
     model,
-    train_dataloaders=data_loaders["train"],
-    val_dataloaders=data_loaders["validation"],
+    train_dataloaders=dataloaders["train"],
+    val_dataloaders=dataloaders["val"],
     ckpt_path=config.ckpt_load_path,
+  )
+
+  trainer.test(
+    model,
+    dataloaders=dataloaders["test"],
   )
 
 

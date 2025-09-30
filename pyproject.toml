@@ -27,6 +27,8 @@ dependencies = [
   "speechbrain",
   "peft",
   "transformers",
+  "wandb",
+  "lightning",
   
   "eegpt",
 ]
