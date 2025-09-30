@@ -33,11 +33,11 @@ class TrainingConfig:
   num_epochs: int = 100
   save_model_per_epochs: int = 5
   val_every_n_epoch: int = 1
-  ds_p_train=0.85
-  ds_p_val=0.0
-  ds_split_seed=42
-  ds_use_test_for_val=True
-  ds_test_repeated_mul=10
+  ds_p_train = 0.85
+  ds_p_val = 0.0
+  ds_split_seed = 42
+  ds_use_test_for_val = True
+  ds_test_repeated_mul = 10
   ckpt_load_path: Optional[str] = None  # 'best', 'last', <path]>
   wandb_log_model: Union[Literal["all"], bool] = "all"
   project_name: str = "neural-music-decoding"
@@ -228,7 +228,9 @@ def main(config=config):
   )
 
   print(f"Model trainable params: {count_n_params(model)}")
-  print(f"Note that val and test dataloaders augmentation/randomness in the form of choosing the 4s fragment.")
+  print(
+    "Note that val and test dataloaders augmentation/randomness in the form of choosing the 4s fragment."
+  )
 
   log_hyperparameters(model, dataloaders, config, wandb_logger)
 
