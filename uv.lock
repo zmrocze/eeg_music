@@ -463,6 +463,74 @@ wheels = [
 ]
 
 [[package]]
+name = "eeg-music"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "eegpt" },
+    { name = "ipykernel" },
+    { name = "ipython" },
+    { name = "jupyter" },
+    { name = "librosa" },
+    { name = "lightning" },
+    { name = "mat73" },
+    { name = "matplotlib" },
+    { name = "mne" },
+    { name = "mne-bids", extra = ["full"] },
+    { name = "notebook" },
+    { name = "numpy" },
+    { name = "openneuro-py" },
+    { name = "pandas" },
+    { name = "peft" },
+    { name = "pip" },
+    { name = "resampy" },
+    { name = "scikit-image" },
+    { name = "scipy" },
+    { name = "speechbrain" },
+    { name = "torch" },
+    { name = "torcheeg" },
+    { name = "transformers" },
+    { name = "wandb" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "eegpt", directory = "submodules/EEGPT" },
+    { name = "ipykernel" },
+    { name = "ipython" },
+    { name = "jupyter" },
+    { name = "librosa" },
+    { name = "lightning" },
+    { name = "mat73" },
+    { name = "matplotlib" },
+    { name = "mne" },
+    { name = "mne-bids", extras = ["full"] },
+    { name = "notebook" },
+    { name = "numpy" },
+    { name = "openneuro-py" },
+    { name = "pandas" },
+    { name = "peft" },
+    { name = "pip" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'" },
+    { name = "resampy" },
+    { name = "scikit-image" },
+    { name = "scipy" },
+    { name = "speechbrain" },
+    { name = "torch" },
+    { name = "torcheeg" },
+    { name = "transformers" },
+    { name = "wandb" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "eeglabio"
 version = "0.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1270,74 +1338,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/10/5c/d417ac692eca2dcd5b2a8460389fa8883b5d7aafbccc0e48a206c6606365/lmdb-1.7.3-cp312-cp312-win_arm64.whl", hash = "sha256:4aa31d12b16fa0d4ab5d49a347a352eb65f8887ae52e9bfe1811b5daff83a064", size = 94184, upload-time = "2025-07-26T01:11:09.254Z" },
     { url = "https://files.pythonhosted.org/packages/b9/ab/e6c2ba79107d20c7a45eae2d69e395691635e761b1e57f5a29c5f2fc42ff/lmdb-1.7.3-py3-none-any.whl", hash = "sha256:4cd7fb79b2c69dcf564d4eec36237e0efc303559176b60ff36fb47ccd3b8b5bb", size = 148538, upload-time = "2025-07-26T01:11:42.118Z" },
 ]
-
-[[package]]
-name = "magisterka"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "eegpt" },
-    { name = "ipykernel" },
-    { name = "ipython" },
-    { name = "jupyter" },
-    { name = "librosa" },
-    { name = "lightning" },
-    { name = "mat73" },
-    { name = "matplotlib" },
-    { name = "mne" },
-    { name = "mne-bids", extra = ["full"] },
-    { name = "notebook" },
-    { name = "numpy" },
-    { name = "openneuro-py" },
-    { name = "pandas" },
-    { name = "peft" },
-    { name = "pip" },
-    { name = "resampy" },
-    { name = "scikit-image" },
-    { name = "scipy" },
-    { name = "speechbrain" },
-    { name = "torch" },
-    { name = "torcheeg" },
-    { name = "transformers" },
-    { name = "wandb" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "eegpt", directory = "submodules/EEGPT" },
-    { name = "ipykernel" },
-    { name = "ipython" },
-    { name = "jupyter" },
-    { name = "librosa" },
-    { name = "lightning" },
-    { name = "mat73" },
-    { name = "matplotlib" },
-    { name = "mne" },
-    { name = "mne-bids", extras = ["full"] },
-    { name = "notebook" },
-    { name = "numpy" },
-    { name = "openneuro-py" },
-    { name = "pandas" },
-    { name = "peft" },
-    { name = "pip" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "resampy" },
-    { name = "scikit-image" },
-    { name = "scipy" },
-    { name = "speechbrain" },
-    { name = "torch" },
-    { name = "torcheeg" },
-    { name = "transformers" },
-    { name = "wandb" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "markdown-it-py"

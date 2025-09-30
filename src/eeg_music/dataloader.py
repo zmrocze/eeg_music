@@ -2,7 +2,7 @@ from fractions import Fraction
 import torch
 from torch.utils.data import DataLoader
 from typing import List, Dict, Callable, Any
-from data import (
+from .data import (
   EEGMusicDataset,
   MappedDataset,
   MelRaw,

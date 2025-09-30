@@ -70,7 +70,7 @@ References:
 """
 
 from abc import ABC, abstractmethod
-from data import (
+from .data import (
   CalibrationMusicId,
   EegData,
   MusicFilename,

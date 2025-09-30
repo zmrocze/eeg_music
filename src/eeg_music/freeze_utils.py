@@ -2,7 +2,7 @@
 Utility functions for freezing/unfreezing specific parts of the EEG-to-music model.
 """
 
-from eegpt import EegptLightning
+from .eegpt import EegptLightning
 import torch
 from typing import Optional, Tuple, Dict, Any
 

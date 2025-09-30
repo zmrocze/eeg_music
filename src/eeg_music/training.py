@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from lightning import Callback, Trainer
-from dataloader import load_and_create_dataloaders
+from .dataloader import load_and_create_dataloaders
 import torch
 from skimage.metrics import structural_similarity
 from sklearn.metrics.pairwise import cosine_similarity
@@ -21,8 +21,8 @@ from lightning.pytorch.callbacks import (
   OnExceptionCheckpoint,
   RichProgressBar,
 )
-from eegpt import EegptLightning, EegptConfig, LRCosine, EEG_WIDTH, USING_CHANNELS
-from freeze_utils import freeze_all_except_head_and_adapters
+from .eegpt import EegptLightning, EegptConfig, LRCosine, EEG_WIDTH, USING_CHANNELS
+from .freeze_utils import freeze_all_except_head_and_adapters
 
 
 @dataclass

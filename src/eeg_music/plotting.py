@@ -4,7 +4,7 @@ from typing import Union, Dict, Any
 import matplotlib.figure as mfig
 from dataclasses import dataclass
 
-from data import (
+from .data import (
   TrialData,
   RawEeg,
   WavRAW,
@@ -39,6 +39,7 @@ def plot_trial_data(trial_data: TrialData[RawEeg, Union[WavRAW, MelRaw]]) -> Tri
   music = trial_data.music_data.get_music()
 
   # Create spectrogram plot based on music data type
+  spectrogram_fig = None
   match music:
     case WavRAW() as wav:
       spectrogram_fig = mkplot_melspectrogram(
