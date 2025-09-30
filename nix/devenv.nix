@@ -7,7 +7,6 @@
         # https://devenv.sh/basics/
         env.GREET = "devenv";
         enterShell = ''
-          hello
           git --version
         '';
 

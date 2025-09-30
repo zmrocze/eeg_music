@@ -16,3 +16,4 @@
  - [ ] actually just use fif. use both
  - [ ] log also just eeg in validation
  - [ ] use chan_conv
+ - [ ] calculate auroc within a subject

@@ -187,14 +187,14 @@ EEG_WIDTH = 256 * 4
 # "./model_checkpoints/25866970/EEGPT/checkpoint/eegpt_mcae_58chs_4s_large4E.ckpt"
 
 
-def load_model(chpt_path) -> EEGPTClassifier:
+def load_model(chpt_path, num_classes, use_chan_conv) -> EEGPTClassifier:
   model = EEGPTClassifier(
-    128,
+    num_classes,
     in_channels=len(USING_CHANNELS),
     img_size=[len(USING_CHANNELS), EEG_WIDTH],
     use_channels_names=USING_CHANNELS,
     patch_stride=64,
-    use_chan_conv=True,
+    use_chan_conv=use_chan_conv,
     use_predictor=True,
     desired_time_len=EEG_WIDTH,
   )
@@ -217,8 +217,8 @@ class EegptWithLinear(torch.nn.Module):
     return x
 
   @classmethod
-  def load_from_checkpoint(cls, chpt_path):
-    model = load_model(chpt_path)
+  def load_from_checkpoint(cls, chpt_path, num_classes=128, use_chan_conv=True):
+    model = load_model(chpt_path, num_classes=num_classes, use_chan_conv=use_chan_conv)
     return cls(model)
 
 
@@ -249,6 +249,8 @@ class LRCosine:
 class EegptConfig:
   chpt_path: Path
   lr_config: Union[float, LRCosine] = 1e-4
+  num_classes: int = 128
+  use_chan_conv: bool = True
   # batch_size: int = 8
   # num_workers: int = 4
   # prefetch_factor: int = 2
@@ -278,7 +280,11 @@ class EegptLightning(LightningModule):
     super().__init__()
     self.config = config
     self.save_hyperparameters()
-    self.model = EegptWithLinear.load_from_checkpoint(self.config.chpt_path)
+    self.model = EegptWithLinear.load_from_checkpoint(
+      self.config.chpt_path,
+      num_classes=self.config.num_classes,
+      use_chan_conv=self.config.use_chan_conv,
+    )
     self.loss_fn = MSELoss()
 
   def forward(self, x):
