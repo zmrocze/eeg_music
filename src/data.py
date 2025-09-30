@@ -1153,6 +1153,18 @@ class StratifiedSamplingDataset(EEGMusicDataset):
     return trial
 
 
+class RepeatedDataset(torchdata.Dataset):
+  def __init__(self, dataset, num_repeats):
+    self.dataset = dataset
+    self.num_repeats = num_repeats
+
+  def __len__(self):
+    return len(self.dataset) * self.num_repeats
+
+  def __getitem__(self, idx):
+    return self.dataset[idx % len(self.dataset)]
+
+
 def onset_secs_to_samples(onset_secs, sfreq):
   return round(onset_secs * sfreq)
 
