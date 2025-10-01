@@ -374,6 +374,7 @@ def log_hyperparameters(model, dataloaders, config, wandb_logger):
 
 
 def main(config=config):
+  print("DOEs it even work???")
   dataloaders = load_and_create_dataloaders(config.data_path, config)
   assert (
     isinstance(config.lr_config, float) if config.use_learning_rate_finder else True
