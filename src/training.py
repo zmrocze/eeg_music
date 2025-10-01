@@ -442,7 +442,7 @@ def main(config=config):
     check_val_every_n_epoch=config.val_every_n_epoch,
     max_epochs=config.num_epochs,
     accelerator="auto",
-    precision="16-mixed"
+    # precision="16-mixed"
   )
 
   print("trainer_precision: ", trainer.precision)

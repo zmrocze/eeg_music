@@ -300,7 +300,8 @@ class EegptLightning(LightningModule):
     self.loss_fn = MSELoss()
 
   def forward(self, x):
-    return self.model(x)
+    with torch.autocast(device_type="cuda", enabled=False):
+      return self.model(x)
 
   def training_step(self, batch, batch_idx):
     x = batch["eeg"]
