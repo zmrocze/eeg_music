@@ -329,7 +329,7 @@ class EegptLightning(LightningModule):
       c += 1
       dtypes.add(p.dtype)
     print(dtypes)
-    print("across {c} params")
+    print(f"across {c} params")
     y_hat = self(x)
     loss = self.loss_fn(y_hat, y)
     self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)

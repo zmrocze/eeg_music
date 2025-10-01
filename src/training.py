@@ -444,6 +444,8 @@ def main(config=config):
   )
 
   print("trainer_precision: ", trainer.precision)
+  print("trainer_precision: ", trainer.precision)
+  print("trainer_precision: ", trainer.precision)
 
   print(f"Model trainable params: {count_n_params(model)}")
   print(
