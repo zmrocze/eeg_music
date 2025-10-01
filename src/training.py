@@ -136,8 +136,6 @@ class SpectrogramLoggingCallback(Callback):
     if batch_idx == self.val_log_batch_idx:
       x = batch["eeg"]
       y = batch["mel"]
-      print(x.dtype)
-      print(y.dtype)
       y_hat = pl_module(x)
       log_spectrograms(pl_module, y_hat, y, batch_idx, stage="val")
 
@@ -444,6 +442,8 @@ def main(config=config):
     max_epochs=config.num_epochs,
     accelerator="auto",
   )
+
+  print("trainer_precision: ", trainer.precision)
 
   print(f"Model trainable params: {count_n_params(model)}")
   print(
