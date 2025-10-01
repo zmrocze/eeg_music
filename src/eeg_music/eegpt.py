@@ -189,7 +189,8 @@ EEG_WIDTH = 256 * 4
 
 def load_model(chpt_path, num_classes, use_chan_conv) -> EEGPTClassifier:
   model = EEGPTClassifier(
-    num_classes,
+    # num_classes,
+    0,
     in_channels=len(USING_CHANNELS),
     img_size=[len(USING_CHANNELS), EEG_WIDTH],
     use_channels_names=USING_CHANNELS,
@@ -197,6 +198,7 @@ def load_model(chpt_path, num_classes, use_chan_conv) -> EEGPTClassifier:
     use_chan_conv=use_chan_conv,
     use_predictor=True,
     desired_time_len=EEG_WIDTH,
+    interpolate_factor=1.0,
   )
   checkpoint = torch.load(chpt_path, map_location="cpu", weights_only=False)
   model.load_state_dict(
@@ -209,11 +211,13 @@ class EegptWithLinear(torch.nn.Module):
   def __init__(self, model):
     super().__init__()
     self.model = model
-    self.linear = ResidualLinear(model.num_classes, 128)
+    self.linear = ResidualLinear(model.embed_dim, 256, 4 * 128)
 
   def forward(self, x):
-    x = self.model(x)
-    x = self.linear(x)
+    x = self.model(x, return_patch_tokens=True)
+    x = self.linear(x)  # B x patches x 512
+    x = x.reshape(x.shape[0], x.shape[1] * 4, 128)  # B x 4 * patches x 128
+    x = x.permute(0, 2, 1)  # B x 128 x 4 * patches
     return x
 
   @classmethod
@@ -223,16 +227,20 @@ class EegptWithLinear(torch.nn.Module):
 
 
 class ResidualLinear(torch.nn.Module):
-  def __init__(self, input_dim, output_dim):
+  def __init__(self, input_dim, hidden_dim, output_dim):
     super(ResidualLinear, self).__init__()
-    self.linear1 = torch.nn.Linear(input_dim, input_dim)
-    self.linear2 = torch.nn.Linear(input_dim, output_dim)
+    # like in eegptclassifier
+    self.linear1 = torch.nn.Linear(input_dim, hidden_dim)
+    self.linear2 = torch.nn.Linear(input_dim, hidden_dim)
+    # linear with weights l2 norm equal 1
+    # self.linear3 = LinearWithConstraint(hidden_dim, output_dim)
+    self.linear3 = torch.nn.Linear(hidden_dim, output_dim)
 
   def forward(self, x):
-    residual = x  # 128
-    x = torch.relu(self.linear1(x))  # 128
-    x += residual  # 128
-    x = self.linear2(x)  # 128
+    residual = x  # input_dim
+    x = torch.relu(self.linear1(x))  # hidden_dim
+    x += self.linear2(residual)  # hidden_dim
+    x = self.linear3(x)  # output_dim
     return x
 
 
