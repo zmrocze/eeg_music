@@ -14,7 +14,7 @@ def freeze_all_except_head_and_adapters(
   Freeze all model parameters except:
   1. chan_conv - channel convolution layer
   2. head - the final linear classification layer in EEGPTClassifier
-  3. linear - the ResidualLinear module (both linear1 and linear2)
+  3. linear - the ResidualLinear module (linear1, linear2, and linear3)
 
   This allows fine-tuning only the task-specific adaptation layers while
   keeping the pretrained encoder and reconstructor/predictor frozen.
@@ -32,8 +32,9 @@ def freeze_all_except_head_and_adapters(
           │   ├── reconstructor/predictor - FROZEN
           │   └── head (LinearWithConstraint) - TRAINABLE
           └── linear (ResidualLinear) - TRAINABLE
-              ├── linear1 - TRAINABLE
-              └── linear2 - TRAINABLE
+              ├── linear1 (input_dim -> hidden_dim) - TRAINABLE
+              ├── linear2 (input_dim -> hidden_dim) - TRAINABLE
+              └── linear3 (hidden_dim -> output_dim) - TRAINABLE
 
   Note: Will raise AttributeError if expected attributes don't exist.
   """
@@ -152,9 +153,12 @@ def freeze_all_except_head_and_adapters(
     print(
       "  ✓ head: Final linear layer in EEGPTClassifier (maps embeddings to num_classes)"
     )
-    print("  ✓ linear (ResidualLinear): Two-layer residual network (linear1 + linear2)")
-    print("    - linear1: input_dim -> input_dim with residual connection")
-    print("    - linear2: input_dim -> output_dim (final projection)")
+    print(
+      "  ✓ linear (ResidualLinear): Three-layer residual network (linear1 + linear2 + linear3)"
+    )
+    print("    - linear1: input_dim -> hidden_dim with ReLU activation")
+    print("    - linear2: input_dim -> hidden_dim with residual connection")
+    print("    - linear3: hidden_dim -> output_dim (final projection)")
 
     print("\nWHAT IS FROZEN:")
     print(

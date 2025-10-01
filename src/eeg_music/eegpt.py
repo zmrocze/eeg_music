@@ -204,6 +204,10 @@ def load_model(chpt_path, num_classes, use_chan_conv) -> EEGPTClassifier:
   model.load_state_dict(
     checkpoint["state_dict"], strict=False
   )  # strict=False to allow new classification head
+
+  # # Ensure all parameters are float32 to avoid mixed precision issues
+  # model = model.float()
+
   return model
 
 

@@ -59,7 +59,7 @@ class TrainingConfig:
 
   # Freezing strategy
   freeze_layers: bool = (
-    False  # If True, freeze all except chan_conv, head, and ResidualLinear
+    True  # If True, freeze all except chan_conv, head, and ResidualLinear
   )
   use_chan_conv: bool = True
   num_classes: int = 128

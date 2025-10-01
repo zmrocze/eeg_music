@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import WandbLogger
 # .pytorch.loggers.wandb
 import wandb
 from dataclasses import dataclass, asdict, field
-from typing import Literal, Optional, Union
+from typing import Literal, Union
 import random
 from lightning.pytorch.callbacks import (
   LearningRateFinder,
@@ -50,7 +50,7 @@ class TrainingConfig:
   ds_use_test_for_val = True
   ds_test_repeated_mul = 10
 
-  ckpt_load_path: Optional[str] = None  # 'best', 'last', <path]>
+  # ckpt_load_path: Optional[str] = None  # 'best', 'last', <path]>
 
   wandb_log_model: Union[Literal["all"], bool] = "all"
   project_name: str = "neural-music-decoding"
@@ -455,7 +455,8 @@ def main(config=config):
     model,
     train_dataloaders=dataloaders["train"],
     val_dataloaders=dataloaders["val"],
-    ckpt_path=config.ckpt_load_path,
+    # ckpt_path=config.ckpt_load_path,
+    ckpt_path=None,
   )
 
   trainer.test(
