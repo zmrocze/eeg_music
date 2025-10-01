@@ -305,6 +305,10 @@ class EegptLightning(LightningModule):
   def training_step(self, batch, batch_idx):
     x = batch["eeg"]
     y = batch["mel"]
+    print(x.dtype)
+    print(y.dtype)
+    print(x.device)
+    print(y.device)
     y_hat = self(x)
     loss = self.loss_fn(y_hat, y)
     self.log(
@@ -315,6 +319,10 @@ class EegptLightning(LightningModule):
   def validation_step(self, batch, batch_idx):
     x = batch["eeg"]
     y = batch["mel"]
+    print(x.dtype)
+    print(y.dtype)
+    print(x.device)
+    print(y.device)
     y_hat = self(x)
     loss = self.loss_fn(y_hat, y)
     self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)

@@ -136,6 +136,8 @@ class SpectrogramLoggingCallback(Callback):
     if batch_idx == self.val_log_batch_idx:
       x = batch["eeg"]
       y = batch["mel"]
+      print(x.dtype)
+      print(y.dtype)
       y_hat = pl_module(x)
       log_spectrograms(pl_module, y_hat, y, batch_idx, stage="val")
 
@@ -374,7 +376,6 @@ def log_hyperparameters(model, dataloaders, config, wandb_logger):
 
 
 def main(config=config):
-  device = "cuda" if torch.cuda.is_available() else "cpu"
   dataloaders = load_and_create_dataloaders(config.data_path, config)
   assert (
     isinstance(config.lr_config, float) if config.use_learning_rate_finder else True
@@ -441,7 +442,7 @@ def main(config=config):
     logger=wandb_logger,
     check_val_every_n_epoch=config.val_every_n_epoch,
     max_epochs=config.num_epochs,
-    accelerator=device,
+    accelerator="auto",
   )
 
   print(f"Model trainable params: {count_n_params(model)}")
