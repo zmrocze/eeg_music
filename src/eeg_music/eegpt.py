@@ -299,17 +299,11 @@ class EegptLightning(LightningModule):
     self.loss_fn = MSELoss()
 
   def forward(self, x):
-    with torch.autocast(device_type="cuda", enabled=False):
-      return self.model(x)
+    return self.model(x)
 
   def training_step(self, batch, batch_idx):
     x = batch["eeg"]
     y = batch["mel"]
-    print("training_step")
-    print(x.dtype)
-    print(y.dtype)
-    print(x.device)
-    print(y.device)
     y_hat = self(x)
     loss = self.loss_fn(y_hat, y)
     self.log(
@@ -320,18 +314,6 @@ class EegptLightning(LightningModule):
   def validation_step(self, batch, batch_idx):
     x = batch["eeg"]
     y = batch["mel"]
-    print("validation_step")
-    print(x.dtype)
-    print(y.dtype)
-    print(x.device)
-    print(y.device)
-    dtypes = set()
-    c = 0
-    for p in self.model.parameters():
-      c += 1
-      dtypes.add(p.dtype)
-    print(dtypes)
-    print(f"across {c} params")
     y_hat = self(x)
     loss = self.loss_fn(y_hat, y)
     self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)

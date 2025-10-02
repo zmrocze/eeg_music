@@ -61,3 +61,6 @@ solution 2:
 just use the intersection of ours and finetuning ones.
 then you don't even need chan_conv.
 Q: so to use it or not?
+
+A: when using it we need to backpropagate through whole network (even if we don't update transformer weights)
+so let's set use_chan_conv to False!
