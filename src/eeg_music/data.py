@@ -376,7 +376,7 @@ class OnDiskEeg(EegData):
     # Note: we could go on with preload=False here, but then we'd need another
     # differentiating type for RawEEG but actually certainly loaded.
     # Turns out methods like filter don't load when needed but error out.
-    return RawEeg(raw_eeg=mne.io.read_raw(self.filepath, preload=True))
+    return RawEeg(raw_eeg=mne.io.read_raw(self.filepath, preload=True, verbose="error"))
 
   def save(self, filepath: Path) -> None:
     """Save the EEG data by copying the file."""
