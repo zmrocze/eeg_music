@@ -58,14 +58,16 @@ def freeze_all_except_head_and_adapters(
     }
 
     # chan_conv
-    chan_conv_module = eegpt_classifier.chan_conv
-    chan_conv_params = sum(p.numel() for p in chan_conv_module.parameters())
-    chan_conv_trainable = sum(
-      p.numel() for p in chan_conv_module.parameters() if p.requires_grad
-    )
-    components["chan_conv"] = (chan_conv_trainable, chan_conv_params)
-    trainable_params += chan_conv_trainable
-    frozen_params += chan_conv_params - chan_conv_trainable
+
+    if hasattr(eegpt_classifier, "chan_conv"):
+      chan_conv_module = eegpt_classifier.chan_conv
+      chan_conv_params = sum(p.numel() for p in chan_conv_module.parameters())
+      chan_conv_trainable = sum(
+        p.numel() for p in chan_conv_module.parameters() if p.requires_grad
+      )
+      components["chan_conv"] = (chan_conv_trainable, chan_conv_params)
+      trainable_params += chan_conv_trainable
+      frozen_params += chan_conv_params - chan_conv_trainable
 
     # head
     head_module = eegpt_classifier.head
