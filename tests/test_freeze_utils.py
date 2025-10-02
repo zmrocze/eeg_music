@@ -23,7 +23,12 @@ def test_freeze_function():
     return
 
   # Create model
-  config = EegptConfig(chpt_path=chpt_path, lr_config=1e-4)
+  config = EegptConfig(
+    chpt_path=chpt_path,
+    lr_config=1e-4,
+    trainable=["linear", "head"],
+    use_chan_conv=False,
+  )
   model = EegptLightning(config)
 
   print("BEFORE FREEZING:")

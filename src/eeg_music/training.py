@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from lightning import Callback, Trainer
-from .dataloader import load_and_create_dataloaders
+from eeg_music.dataloader import load_and_create_dataloaders
 import torch
 from skimage.metrics import structural_similarity
 from sklearn.metrics.pairwise import cosine_similarity
@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import WandbLogger
 # .pytorch.loggers.wandb
 import wandb
 from dataclasses import dataclass, asdict, field
-from typing import Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 import random
 from lightning.pytorch.callbacks import (
   LearningRateFinder,
@@ -21,8 +21,14 @@ from lightning.pytorch.callbacks import (
   OnExceptionCheckpoint,
   RichProgressBar,
 )
-from .eegpt import EegptLightning, EegptConfig, LRCosine, EEG_WIDTH, USING_CHANNELS
-from .freeze_utils import freeze_all_except_head_and_adapters
+from eeg_music.eegpt import (
+  EegptLightning,
+  EegptConfig,
+  LRCosine,
+  EEG_WIDTH,
+  USING_CHANNELS,
+)
+from eeg_music.freeze_utils import freeze_all_except_head_and_adapters
 
 
 @dataclass
@@ -44,7 +50,7 @@ class TrainingConfig:
   ds_use_test_for_val = True
   ds_test_repeated_mul = 10
 
-  ckpt_load_path: Optional[str] = None  # 'best', 'last', <path]>
+  # ckpt_load_path: Optional[str] = None  # 'best', 'last', <path]>
 
   wandb_log_model: Union[Literal["all"], bool] = "all"
   project_name: str = "neural-music-decoding"
@@ -57,12 +63,10 @@ class TrainingConfig:
 
   use_learning_rate_finder: bool = False
 
-  # Freezing strategy
-  freeze_layers: bool = (
-    True  # If True, freeze all except chan_conv, head, and ResidualLinear
-  )
-  use_chan_conv: bool = True
-  num_classes: int = 128
+  trainable: Optional[List[str]] = field(default_factory=lambda: ["linear", "head"])
+
+  # use_chan_conv: bool = True
+  use_chan_conv: bool = False
 
   # AUROC callback settings
   auroc_every_n_epochs: int = 2
@@ -368,7 +372,6 @@ def log_hyperparameters(model, dataloaders, config, wandb_logger):
 
 
 def main(config=config):
-  device = "cuda" if torch.cuda.is_available() else "cpu"
   dataloaders = load_and_create_dataloaders(config.data_path, config)
   assert (
     isinstance(config.lr_config, float) if config.use_learning_rate_finder else True
@@ -376,15 +379,12 @@ def main(config=config):
   eegpt_config = EegptConfig(
     chpt_path=config.eegpt_chpt_path,
     lr_config=config.lr_config,
-    num_classes=config.num_classes,
     use_chan_conv=config.use_chan_conv,
+    trainable=config.trainable,
   )
   model = EegptLightning(eegpt_config)
 
-  # Apply freezing strategy if enabled
-  if config.freeze_layers:
-    print("\nApplying layer freezing strategy...")
-    freeze_all_except_head_and_adapters(model, verbose=True)
+  freeze_all_except_head_and_adapters(model, verbose=True)
 
   wandb_logger = WandbLogger(
     project=config.project_name,
@@ -435,7 +435,9 @@ def main(config=config):
     logger=wandb_logger,
     check_val_every_n_epoch=config.val_every_n_epoch,
     max_epochs=config.num_epochs,
-    accelerator=device,
+    accelerator="auto",
+    # precision="16-mixed"
+    # precision="32-true",
   )
 
   print(f"Model trainable params: {count_n_params(model)}")
@@ -449,7 +451,8 @@ def main(config=config):
     model,
     train_dataloaders=dataloaders["train"],
     val_dataloaders=dataloaders["val"],
-    ckpt_path=config.ckpt_load_path,
+    # ckpt_path=config.ckpt_load_path,
+    ckpt_path=None,
   )
 
   trainer.test(
