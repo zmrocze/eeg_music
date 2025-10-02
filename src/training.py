@@ -443,6 +443,7 @@ def main(config=config):
     max_epochs=config.num_epochs,
     accelerator="auto",
     # precision="16-mixed"
+    precision="32-true",
   )
 
   print("trainer_precision: ", trainer.precision)
