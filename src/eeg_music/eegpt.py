@@ -306,6 +306,7 @@ class EegptLightning(LightningModule):
   def training_step(self, batch, batch_idx):
     x = batch["eeg"]
     y = batch["mel"]
+    print("training_step")
     print(x.dtype)
     print(y.dtype)
     print(x.device)
@@ -320,6 +321,7 @@ class EegptLightning(LightningModule):
   def validation_step(self, batch, batch_idx):
     x = batch["eeg"]
     y = batch["mel"]
+    print("validation_step")
     print(x.dtype)
     print(y.dtype)
     print(x.device)
