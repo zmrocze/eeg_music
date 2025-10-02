@@ -4,7 +4,7 @@ from lightning.pytorch import LightningModule
 import torch
 from torch.nn import MSELoss
 from dataclasses import dataclass
-from typing import Union
+from typing import Union, Optional, List
 
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
@@ -260,8 +260,10 @@ class LRCosine:
 @dataclass
 class EegptConfig:
   chpt_path: Path
+  trainable: Optional[
+    List[str]
+  ]  # None = all trainable; list can contain: "chan_conv", "linear", "head", "reconstructor", "predictor", "target_encoder"
   lr_config: Union[float, LRCosine] = 1e-4
-  num_classes: int = 128
   use_chan_conv: bool = True
   # batch_size: int = 8
   # num_workers: int = 4
@@ -269,12 +271,15 @@ class EegptConfig:
 
 
 def mk_optimizer_and_lr_scheduler(self, config: EegptConfig):
+  # Only optimize parameters that require gradients
+  trainable_params = filter(lambda p: p.requires_grad, self.parameters())
+
   if isinstance(config.lr_config, float):
-    optimizer = torch.optim.AdamW(self.parameters(), lr=config.lr_config)
+    optimizer = torch.optim.AdamW(trainable_params, lr=config.lr_config)
     return optimizer, None
   elif isinstance(config.lr_config, LRCosine):
     lr_config = config.lr_config
-    optimizer = torch.optim.AdamW(self.parameters(), lr=lr_config.max_lr)
+    optimizer = torch.optim.AdamW(trainable_params, lr=lr_config.max_lr)
     lr_scheduler = CosineAnnealingWarmRestarts(
       optimizer,
       T_0=lr_config.T_0,
@@ -297,6 +302,53 @@ class EegptLightning(LightningModule):
       use_chan_conv=self.config.use_chan_conv,
     )
     self.loss_fn = MSELoss()
+
+    # Set trainable parameters based on config
+    self._setup_trainable_parameters()
+
+  def _setup_trainable_parameters(self):
+    """
+    Set trainable parameters based on config.trainable.
+    If trainable is None, all parameters are trainable.
+    Otherwise, only the specified components are trainable.
+    """
+    eegpt_with_linear = self.model
+    eegpt_classifier = self.model.model
+
+    if self.config.trainable is None:
+      # All parameters trainable (default)
+      for param in self.parameters():
+        param.requires_grad = True
+      return
+
+    # Freeze everything first
+    for param in self.parameters():
+      param.requires_grad = False
+
+    # Unfreeze specified components
+    for component in self.config.trainable:
+      if component == "chan_conv":
+        for param in eegpt_classifier.chan_conv.parameters():
+          param.requires_grad = True
+      elif component == "linear":
+        for param in eegpt_with_linear.linear.parameters():
+          param.requires_grad = True
+      elif component == "head":
+        for param in eegpt_classifier.head.parameters():
+          param.requires_grad = True
+      elif component == "reconstructor":
+        if hasattr(eegpt_classifier, "reconstructor"):
+          for param in eegpt_classifier.reconstructor.parameters():
+            param.requires_grad = True
+      elif component == "predictor":
+        if hasattr(eegpt_classifier, "predictor"):
+          for param in eegpt_classifier.predictor.parameters():
+            param.requires_grad = True
+      elif component == "target_encoder":
+        for param in eegpt_classifier.target_encoder.parameters():
+          param.requires_grad = True
+      else:
+        raise ValueError(f"Unknown trainable component: {component}")
 
   def forward(self, x):
     return self.model(x)

@@ -11,13 +11,10 @@ def freeze_all_except_head_and_adapters(
   model: EegptLightning, verbose: bool = True
 ) -> None:
   """
-  Freeze all model parameters except:
-  1. chan_conv - channel convolution layer
-  2. head - the final linear classification layer in EEGPTClassifier
-  3. linear - the ResidualLinear module (linear1, linear2, and linear3)
+  Print information about the model structure and parameter trainability.
 
-  This allows fine-tuning only the task-specific adaptation layers while
-  keeping the pretrained encoder and reconstructor/predictor frozen.
+  NOTE: This function no longer freezes/unfreezes parameters.
+  Trainable parameters are now set in EegptLightning.__init__ based on the trainable config.
 
   Args:
       model: The EegptLightning model
@@ -27,14 +24,14 @@ def freeze_all_except_head_and_adapters(
       EegptLightning
       └── model (EegptWithLinear)
           ├── model (EEGPTClassifier)
-          │   ├── chan_conv - TRAINABLE
-          │   ├── target_encoder (EEGTransformer) - FROZEN
-          │   ├── reconstructor/predictor - FROZEN
-          │   └── head (LinearWithConstraint) - TRAINABLE
-          └── linear (ResidualLinear) - TRAINABLE
-              ├── linear1 (input_dim -> hidden_dim) - TRAINABLE
-              ├── linear2 (input_dim -> hidden_dim) - TRAINABLE
-              └── linear3 (hidden_dim -> output_dim) - TRAINABLE
+          │   ├── chan_conv
+          │   ├── target_encoder (EEGTransformer)
+          │   ├── reconstructor/predictor
+          │   └── head (LinearWithConstraint)
+          └── linear (ResidualLinear)
+              ├── linear1 (input_dim -> hidden_dim)
+              ├── linear2 (input_dim -> hidden_dim)
+              └── linear3 (hidden_dim -> output_dim)
 
   Note: Will raise AttributeError if expected attributes don't exist.
   """
@@ -42,22 +39,6 @@ def freeze_all_except_head_and_adapters(
   # Extract the nested model structure from EegptLightning
   eegpt_with_linear = model.model
   eegpt_classifier = model.model.model
-
-  # First, freeze everything
-  for param in model.parameters():
-    param.requires_grad = False
-
-  # Unfreeze chan_conv - will error if it doesn't exist
-  for param in eegpt_classifier.chan_conv.parameters():
-    param.requires_grad = True
-
-  # Unfreeze the head (final classification layer in EEGPTClassifier)
-  for param in eegpt_classifier.head.parameters():
-    param.requires_grad = True
-
-  # Unfreeze the ResidualLinear module
-  for param in eegpt_with_linear.linear.parameters():
-    param.requires_grad = True
 
   if verbose:
     print("\n" + "=" * 80)

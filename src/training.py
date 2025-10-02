@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import WandbLogger
 # .pytorch.loggers.wandb
 import wandb
 from dataclasses import dataclass, asdict, field
-from typing import Literal, Union
+from typing import List, Literal, Optional, Union
 import random
 from lightning.pytorch.callbacks import (
   LearningRateFinder,
@@ -63,12 +63,10 @@ class TrainingConfig:
 
   use_learning_rate_finder: bool = False
 
-  # Freezing strategy
-  freeze_layers: bool = (
-    False  # If True, freeze all except chan_conv, head, and ResidualLinear
-  )
-  use_chan_conv: bool = True
-  num_classes: int = 128
+  trainable: Optional[List[str]] = ["linear", "head"]
+
+  # use_chan_conv: bool = True
+  use_chan_conv: bool = False
 
   # AUROC callback settings
   auroc_every_n_epochs: int = 2
@@ -374,7 +372,6 @@ def log_hyperparameters(model, dataloaders, config, wandb_logger):
 
 
 def main(config=config):
-  print("DOEs it even work???")
   dataloaders = load_and_create_dataloaders(config.data_path, config)
   assert (
     isinstance(config.lr_config, float) if config.use_learning_rate_finder else True
@@ -382,15 +379,12 @@ def main(config=config):
   eegpt_config = EegptConfig(
     chpt_path=config.eegpt_chpt_path,
     lr_config=config.lr_config,
-    num_classes=config.num_classes,
     use_chan_conv=config.use_chan_conv,
+    trainable=config.trainable,
   )
   model = EegptLightning(eegpt_config)
 
-  # Apply freezing strategy if enabled
-  if config.freeze_layers:
-    print("\nApplying layer freezing strategy...")
-    freeze_all_except_head_and_adapters(model, verbose=True)
+  freeze_all_except_head_and_adapters(model, verbose=True)
 
   wandb_logger = WandbLogger(
     project=config.project_name,

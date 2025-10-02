@@ -57,7 +57,6 @@ def test_model_output_shape():
 
   model = EegptWithLinear.load_from_checkpoint(
     config.eegpt_chpt_path,
-    num_classes=config.num_classes,
     use_chan_conv=config.use_chan_conv,
   )
   model.eval()
