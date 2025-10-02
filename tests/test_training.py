@@ -28,7 +28,6 @@ def test_training_main_one_epoch(tmp_path):
     run_extra_name="one-epoch-test",
     auroc_every_n_epochs=1,
     use_learning_rate_finder=False,
-    freeze_layers=False,
   )
 
   # Run training for 1 epoch

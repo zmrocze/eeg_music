@@ -242,8 +242,7 @@ class ResidualLinear(torch.nn.Module):
 
   def forward(self, x):
     residual = x  # input_dim
-    x = torch.relu(self.linear1(x))  # hidden_dim
-    x += self.linear2(residual)  # hidden_dim
+    x = self.linear2(residual) + torch.relu(self.linear1(x))  # hidden_dim
     x = self.linear3(x)  # output_dim
     return x
 
