@@ -17,6 +17,7 @@ from typing import List, Literal, Optional, Union
 import random
 from lightning.pytorch.callbacks import (
   LearningRateFinder,
+  LearningRateMonitor,
   ModelCheckpoint,
   OnExceptionCheckpoint,
   RichProgressBar,
@@ -433,6 +434,7 @@ def main(config=config):
       SpectrogramLoggingCallback(),
       RichProgressBar(),
       save_on_exc,
+      LearningRateMonitor(logging_interval="step"),
     ]
     + auroc_callbacks
     + optional_lr_finder,
