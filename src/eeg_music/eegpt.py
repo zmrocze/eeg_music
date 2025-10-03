@@ -296,6 +296,9 @@ class EegptLightning(LightningModule):
   def __init__(self, config: EegptConfig):
     super().__init__()
     self.config = config
+    if isinstance(self.config.lr_config, float):
+      # to access by LearningRateFinder
+      self.learning_rate = self.config.lr_config
     self.save_hyperparameters()
     self.model = EegptWithLinear.load_from_checkpoint(
       self.config.chpt_path,
