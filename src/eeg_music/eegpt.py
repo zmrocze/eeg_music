@@ -1,6 +1,7 @@
 from pathlib import Path
 from downstream.Modules.models.EEGPT_mcae_finetune import EEGPTClassifier
 from lightning.pytorch import LightningModule
+import wandb
 import torch
 from torch.nn import MSELoss
 from dataclasses import dataclass
@@ -304,6 +305,15 @@ class EegptLightning(LightningModule):
 
     # Set trainable parameters based on config
     self._setup_trainable_parameters()
+
+  @classmethod
+  def load_from_wandb(cls, artifact_name):
+    ### artifact_name i.e. 'zmrocze-uniwroc/neural-music-decoding/model-wttyehe9:v1'
+    run = wandb.init()
+    artifact = run.use_artifact(artifact_name, type="model")
+    artifact_dir = artifact.download()
+    model = cls.load_from_checkpoint(artifact_dir + "/model.ckpt")
+    return model
 
   def _setup_trainable_parameters(self):
     """
