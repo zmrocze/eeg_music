@@ -74,6 +74,7 @@ class TrainingConfig:
   auroc_similarity_metric: list[Literal["cosine", "structural_similarity"]] = field(
     default_factory=lambda: ["cosine", "structural_similarity"]
   )
+  auroc_prediction_batch_size: int = 128
 
 
 config = TrainingConfig()
@@ -160,15 +161,22 @@ class AUROCCallback(Callback):
   mel spectrograms and computes the rank of the correct match.
   """
 
-  def __init__(self, auroc_every_n_epochs: int = 5, similarity_metric: str = "cosine"):
+  def __init__(
+    self,
+    auroc_every_n_epochs: int = 5,
+    similarity_metric: str = "cosine",
+    prediction_batch_size: int = 128,
+  ):
     """
     Args:
       auroc_every_n_epochs: Calculate AUROC score every N epochs
       similarity_metric: Either 'cosine' or 'structural_similarity'
+      prediction_batch_size: Batch size for generating predictions to control GPU memory
     """
     super().__init__()
     self.auroc_every_n_epochs = auroc_every_n_epochs
     self.similarity_metric = similarity_metric
+    self.prediction_batch_size = prediction_batch_size
     self.auroc_history = []  # Store last 10 scores for moving average
     # Create suffix for metric names to distinguish different similarity metrics
     self.metric_suffix = (
@@ -201,9 +209,14 @@ class AUROCCallback(Callback):
     all_x = torch.cat(all_x, dim=0)  # Shape: (N, channels, time)
     all_y = torch.cat(all_y, dim=0)  # Shape: (N, freq, time)
 
-    # Generate predictions for all samples
+    # Generate predictions in batches to control GPU memory
+    all_y_hat = []
     with torch.no_grad():
-      all_y_hat = pl_module(all_x)  # Shape: (N, freq, time)
+      for i in range(0, all_x.shape[0], self.prediction_batch_size):
+        batch_x = all_x[i : i + self.prediction_batch_size]
+        batch_y_hat = pl_module(batch_x)
+        all_y_hat.append(batch_y_hat)
+    all_y_hat = torch.cat(all_y_hat, dim=0)  # Shape: (N, freq, time)
 
     n_samples = all_y.shape[0]
     ranks = []
@@ -424,6 +437,7 @@ def main(config=config):
     AUROCCallback(
       auroc_every_n_epochs=config.auroc_every_n_epochs,
       similarity_metric=metric,
+      prediction_batch_size=config.auroc_prediction_batch_size,
     )
     for metric in config.auroc_similarity_metric
   ]
