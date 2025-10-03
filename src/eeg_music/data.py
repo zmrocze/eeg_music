@@ -971,7 +971,7 @@ def rereference_trial(
 ) -> TrialData[EegData, MusicData]:
   """Rereference the EEG data in a trial."""
   eeg = trial.eeg_data.get_eeg().raw_eeg.copy()
-  mne.set_eeg_reference(eeg, ref_channels="average")
+  mne.set_eeg_reference(eeg, ref_channels="average", verbose="error")
   return TrialData(
     dataset=trial.dataset,
     subject=trial.subject,
@@ -1096,7 +1096,10 @@ class StratifiedSamplingDataset(EEGMusicDataset):
     random_start = np.random.randint(s_start, min(s_end, n_starts_exact))
     data, _times = eeg_raw[:, random_start : random_start + new_length_samples]
     eeg_raw = mne.io.RawArray(
-      data=data, info=eeg_raw.info, first_samp=eeg_raw.first_samp + random_start
+      data=data,
+      info=eeg_raw.info,
+      first_samp=eeg_raw.first_samp + random_start,
+      verbose="error",
     )
 
     # some notes, maybe irrelevant now:
