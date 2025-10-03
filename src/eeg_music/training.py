@@ -91,8 +91,12 @@ def log_spectrograms(pl_module, y_hat, y, batch_idx, stage: str, n_samples=4):
   images = []
   for i, (pred_spec, true_spec) in enumerate(zip(y_hat, y)):
     # # Normalize for visualization
-    # pred_spec = (pred_spec - pred_spec.min()) / (pred_spec.max() - pred_spec.min() + 1e-8)
-    # true_spec = (true_spec - true_spec.min()) / (true_spec.max() - true_spec.min() + 1e-8)
+    pred_spec = (pred_spec - true_spec.min()) / (
+      true_spec.max() - true_spec.min() + 1e-8
+    )
+    true_spec = (true_spec - true_spec.min()) / (
+      true_spec.max() - true_spec.min() + 1e-8
+    )
 
     # Combine pred and true for side-by-side comparison
     combined_spec = torch.cat((pred_spec, true_spec), dim=1)
@@ -436,6 +440,7 @@ def main(config=config):
     check_val_every_n_epoch=config.val_every_n_epoch,
     max_epochs=config.num_epochs,
     accelerator="auto",
+    log_every_n_steps=1,
     # precision="16-mixed"
     # precision="32-true",
   )
