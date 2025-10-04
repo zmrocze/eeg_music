@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import WandbLogger
 # .pytorch.loggers.wandb
 import wandb
 from dataclasses import dataclass, asdict, field
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union
 import random
 from lightning.pytorch.callbacks import (
   LearningRateFinder,
@@ -389,7 +389,7 @@ def log_hyperparameters(model, dataloaders, config, wandb_logger):
   wandb_logger.log_hyperparams(params_to_log)
 
 
-def main(config=config):
+def main(config=config) -> Tuple[EegptLightning, Trainer, dict]:
   dataloaders = load_and_create_dataloaders(config.data_path, config)
   assert (
     isinstance(config.lr_config, float) if config.use_learning_rate_finder else True
@@ -480,6 +480,8 @@ def main(config=config):
     model,
     dataloaders=dataloaders["test"],
   )
+
+  return model, trainer, dataloaders
 
 
 if __name__ == "__main__":
